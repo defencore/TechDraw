@@ -1,6 +1,8 @@
+import { titleBlockDefaults, titleBlockKeys } from './drawing/title-block-data';
 import type {
   Bounds2,
   Dimension,
+  DrawingLayout,
   DrawingSettings,
   Part,
   Point2,
@@ -15,6 +17,7 @@ export interface ProjectData {
   parts: Part[];
   selected: string[];
   dimensions: Record<string, Dimension[]>;
+  layouts: Record<string, DrawingLayout>;
   settings: DrawingSettings;
 }
 
@@ -272,9 +275,17 @@ function settings(value: unknown): DrawingSettings {
   if (!Number.isInteger(precision) || precision < 0)
     return invalid('decimal places must be an integer from 0 to 6.');
   return {
+    ...(Object.fromEntries(
+      titleBlockKeys.map((key) => [
+        key,
+        s[key] === undefined
+          ? titleBlockDefaults[key]
+          : string(s[key], key, key === 'notes' ? 10000 : 1024),
+      ]),
+    ) as typeof titleBlockDefaults),
     format: choice(s.format, ['A4', 'A3', 'A2', 'A1'], 'paper format'),
     orientation: choice(s.orientation, ['portrait', 'landscape'], 'paper orientation'),
-    template: choice(s.template, ['eskd', 'iso', 'minimal'], 'drawing template'),
+    template: choice(s.template, ['eskd', 'eskd-uk', 'iso', 'minimal'], 'drawing template'),
     scale,
     precision,
     hiddenLines: boolean(s.hiddenLines, 'hidden line setting'),
@@ -287,6 +298,31 @@ function settings(value: unknown): DrawingSettings {
     tolerance: string(s.tolerance, 'general tolerance'),
     notes: string(s.notes, 'technical notes', 10000),
   };
+}
+
+/** Persist sheet-space geometry so manual annotation edits never trigger an implicit reflow. */
+function layout(value: unknown): DrawingLayout {
+  const data = record(value, 'drawing layout');
+  const scale = numeric(data.scale, 'layout scale', 1e6);
+  if (scale <= 0) return invalid('layout scale must be positive.');
+  const transforms = record(data.viewTransforms, 'view transforms');
+  if (
+    Object.keys(transforms).length !== VIEWS.length ||
+    Object.keys(transforms).some((id) => !VIEWS.includes(id as ViewId))
+  )
+    return invalid('drawing layouts require exactly four supported view transforms.');
+  const viewTransforms = {} as DrawingLayout['viewTransforms'];
+  for (const viewId of VIEWS) {
+    const transform = record(transforms[viewId], `${viewId} view transform`);
+    const viewScale = numeric(transform.scale, 'view transform scale', 1e6);
+    if (viewScale !== scale) return invalid('view transform scales must match the layout scale.');
+    viewTransforms[viewId] = {
+      x: numeric(transform.x, 'view transform x'),
+      y: numeric(transform.y, 'view transform y'),
+      scale,
+    };
+  }
+  return { scale, viewTransforms };
 }
 
 /** Parse into fresh, whitelisted objects before any project content reaches the UI. */
@@ -327,7 +363,13 @@ export function parseProject(text: string): ProjectData {
   );
   if (new Set(selected).size !== selected.length || selected.some((id) => !seenParts.has(id)))
     return invalid('selected parts contain duplicate or unknown IDs.');
-  return { parts, dimensions, selected, settings: settings(data.settings) };
+  const sourceLayouts = data.layouts === undefined ? {} : record(data.layouts, 'drawing layouts');
+  const layouts = Object.create(null) as Record<string, DrawingLayout>;
+  for (const [id, value] of Object.entries(sourceLayouts)) {
+    if (!seenParts.has(id)) return invalid('drawing layouts refer to an unknown part.');
+    layouts[id] = layout(value);
+  }
+  return { parts, dimensions, layouts, selected, settings: settings(data.settings) };
 }
 
 export function serializeProject(state: WorkspaceState): string {
@@ -336,6 +378,7 @@ export function serializeProject(state: WorkspaceState): string {
     parts: state.parts,
     selected: [...state.selected],
     dimensions: state.dimensions,
+    layouts: state.layouts,
     settings: state.settings,
   };
   // Saving and opening share one contract, so a saved workspace always reopens safely.

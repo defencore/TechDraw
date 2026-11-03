@@ -1,19 +1,17 @@
 import './style.css';
 import { createCadClient } from './cad/client';
-import { autoDimensions, arrangeDimensions } from './drawing/dimensions';
+import { autoDimensions } from './drawing/dimensions';
+import { initializeDrawing } from './drawing/layout';
+import { titleBlockDefaults, cleanTitleBlockText } from './drawing/title-block-data';
+import {
+  readTitleBlockCache,
+  saveTitleBlockCache,
+  clearTitleBlockCache,
+} from './ui/title-block-cache';
 import { renderDrawing } from './drawing/render';
-import { createLinearDimension, measureAngle } from './measurements';
+import { DrawingCanvas, type CanvasTool } from './ui/drawing-canvas';
 import { parseProject, serializeProject } from './project';
-import type {
-  Dimension,
-  DimensionKind,
-  Part,
-  Point2,
-  Point3,
-  ProjectedEdge,
-  ViewId,
-  DrawingSettings,
-} from './model';
+import type { Dimension, Part, DrawingSettings } from './model';
 import { defaultSettings, DimensionHistory, type WorkspaceState } from './state';
 import { icon } from './ui/icons';
 import { button, option } from './ui/components';
@@ -21,30 +19,39 @@ import { createWorkspaceViews } from './ui/views';
 import { downloadBlob, escapeHtml as e, readPreference, savePreference } from './ui/utils';
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
+const titleBlockStorage = (() => {
+  try {
+    return localStorage;
+  } catch {
+    return undefined;
+  }
+})();
 const state: WorkspaceState = {
   parts: [],
   selected: new Set(),
   activeId: null,
   dimensions: {},
-  settings: { ...defaultSettings },
+  layouts: {},
+  settings: { ...defaultSettings, ...readTitleBlockCache(titleBlockStorage) },
 };
 const histories = new Map<string, DimensionHistory>();
+let titleBlockCached = saveTitleBlockCache(titleBlockStorage, state.settings);
+const pendingArrangement = new Set<string>();
 let theme = readPreference<string>(
   'theme',
   matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light',
 );
 let inspectorTab = 'sheet';
-let tool: 'select' | DimensionKind = 'select';
+let tool: CanvasTool = 'select';
 let selectedDimension: string | undefined;
-let pendingPoint: { viewId: ViewId; point: Point2; source?: Point3 } | undefined;
-let pendingEdge: { viewId: ViewId; edge: ProjectedEdge } | undefined;
 let busy = false;
 let busyOperation: 'import' | 'export' = 'import';
 let autoDetail: 'balanced' | 'full' = 'balanced';
 const collapsedBranches = new Set<string>();
 let progress = '';
 let importToken = 0;
-let zoom = 1;
+let canvasHint = 'Drop STEP files anywhere in the workspace';
+let layoutSettingsKey = '';
 let notification = '';
 let toastTimer: ReturnType<typeof setTimeout>;
 let rendered: ReturnType<typeof renderDrawing> | undefined;
@@ -53,9 +60,6 @@ const cad = createCadClient((message: string) => {
   progress = message;
   updateProgress();
 });
-const canvasResizeObserver = new ResizeObserver(() => {
-  if (!drag) renderPaper();
-});
 const active = () => state.parts.find((p) => p.id === state.activeId);
 const dims = () => (state.activeId ? (state.dimensions[state.activeId] ?? []) : []);
 const history = () => {
@@ -63,6 +67,76 @@ const history = () => {
   if (!histories.has(state.activeId)) histories.set(state.activeId, new DimensionHistory());
   return histories.get(state.activeId)!;
 };
+
+const drawingCanvas = new DrawingCanvas({
+  select(id) {
+    selectedDimension = id;
+    inspectorTab = 'dimensions';
+    refreshInspector();
+  },
+  add: addDimension,
+  edit(dimension) {
+    changeDimensions(dims().map((d) => (d.id === dimension.id ? dimension : d)));
+  },
+  zoom() {
+    const select = document.querySelector<HTMLSelectElement>('#zoom');
+    if (select) select.innerHTML = zoomOptions();
+  },
+  hint(message) {
+    canvasHint = active() ? message : 'Drop STEP files anywhere in the workspace';
+    const hint = document.querySelector('#tool-hint');
+    if (hint) hint.textContent = canvasHint;
+  },
+  error: toast,
+});
+function zoomOptions(): string {
+  const value = drawingCanvas.zoom;
+  const choices = [0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 8, 12, 16];
+  if (!choices.some((n) => Math.abs(n - value) < 1e-8)) choices.push(value);
+  return choices
+    .sort((a, b) => a - b)
+    .map((n) => option(n, `${Math.round(n * 100)}%`, value))
+    .join('');
+}
+function refreshInspector(): void {
+  const views = createWorkspaceViews({
+    state,
+    inspectorTab,
+    selectedDimension,
+    autoDetail,
+    collapsedBranches,
+  });
+  const body = app.querySelector('.inspector-body');
+  if (body) body.innerHTML = views.renderInspector();
+  updateCacheStatus();
+  for (const tab of app.querySelectorAll<HTMLElement>('.inspector-tabs [role="tab"]')) {
+    const selected = tab.dataset.action === `tab:${inspectorTab}`;
+    tab.classList.toggle('active', selected);
+    tab.setAttribute('aria-selected', String(selected));
+  }
+}
+function getPartLayout(part: Part) {
+  const key = JSON.stringify([
+    state.settings.format,
+    state.settings.orientation,
+    state.settings.template,
+    state.settings.scale,
+  ]);
+  if (key !== layoutSettingsKey) {
+    state.layouts = {};
+    for (const item of histories.values()) item.invalidateLayouts();
+    layoutSettingsKey = key;
+  }
+  if (!state.layouts[part.id]) {
+    const initialized = initializeDrawing(part, state.dimensions[part.id] ?? [], state.settings, {
+      arrange: pendingArrangement.has(part.id),
+    });
+    state.dimensions[part.id] = initialized.dimensions;
+    state.layouts[part.id] = initialized.layout;
+    pendingArrangement.delete(part.id);
+  }
+  return state.layouts[part.id];
+}
 
 function toast(message: string): void {
   notification = message;
@@ -77,6 +151,7 @@ function toast(message: string): void {
 
 function render(): void {
   document.documentElement.dataset.theme = theme;
+  const retainedCanvas = app.querySelector<HTMLElement>('#canvas-area');
   const part = active();
   const views = createWorkspaceViews({
     state,
@@ -87,7 +162,7 @@ function render(): void {
   });
   app.innerHTML = `
     <header class="app-header">
-      <a class="brand" href="./" aria-label="TechDraw home"><span class="brand-mark">${icon('dimension')}</span><strong>TechDraw<span class="brand-dot">.</span></strong><span class="brand-by">by DEFENCORE</span></a>
+      <a class="brand" href="./" aria-label="TechDraw home"><span class="brand-mark">${icon('dimension')}</span><span class="brand-wordmark"><strong>TechDraw<span class="brand-dot">.</span></strong><span class="brand-by">by DEFENCORE</span></span></a>
       <div class="header-right"><span class="local-pill">${icon('lock')}<span>Files stay on your device</span></span>${button('help', 'Quick guide', 'info', 'quiet help-button')}${button('theme', '', theme === 'light' ? 'moon' : 'sun', 'icon-button', `aria-label="Switch to ${theme === 'light' ? 'dark' : 'light'} theme" title="Switch theme"`)}</div>
     </header>
     <div class="workspace">
@@ -104,14 +179,14 @@ function render(): void {
       <main class="drawing-workspace">
         <div class="workspace-heading"><div><div class="eyebrow">DRAWING WORKSPACE</div><h1>${part ? e(part.name) : 'From solid to sheet'}</h1></div><div class="export-group">${button('export-svg', 'SVG', undefined, 'secondary compact', !part || busy ? 'disabled' : '')}${button('export-pdf', `Export PDF${state.selected.size > 1 ? ` · ${state.selected.size}` : ''}`, 'download', 'primary', !state.selected.size || busy ? 'disabled' : '')}</div></div>
         <div class="drawing-toolbar" role="toolbar" aria-label="Drawing tools">
-          <div class="tool-group">${button('tool:select', '', 'pointer', `tool-button ${tool === 'select' ? 'active' : ''}`, 'aria-label="Select and move dimensions" title="Select and move (Esc)"')}${button('auto-dimensions', 'Auto dimensions', 'dimension', 'quiet', !part || busy ? 'disabled' : '')}${button('arrange-dimensions', 'Arrange', 'layers', 'quiet', !part || busy ? 'disabled title="Arrange dimension lines"' : 'title="Place smaller dimensions inside larger ones"')}<span class="toolbar-divider"></span><select id="measure-tool" aria-label="Add dimension" ${!part || busy ? 'disabled' : ''}>${option('select', 'Add dimension…', tool)}${option('horizontal', 'Horizontal', tool)}${option('vertical', 'Vertical', tool)}${option('aligned', 'Aligned', tool)}${option('diameter', 'Diameter', tool)}${option('radius', 'Radius', tool)}${option('angle', 'Angle', tool)}</select></div>
-          <div class="tool-group">${button('undo', '', 'undo', 'icon-button', `aria-label="Undo" title="Undo (Ctrl/⌘ Z)" ${!history()?.canUndo ? 'disabled' : ''}`)}${button('redo', '', 'redo', 'icon-button', `aria-label="Redo" title="Redo (Ctrl/⌘ Shift Z)" ${!history()?.canRedo ? 'disabled' : ''}`)}<span class="toolbar-divider"></span>${button('fit', '', 'fit', 'icon-button', 'aria-label="Fit sheet" title="Fit sheet"')}<select id="zoom" aria-label="Sheet zoom">${[0.6, 0.8, 1, 1.25, 1.5, 2].map((n) => option(n, `${Math.round(n * 100)}%`, zoom)).join('')}</select></div>
+          <div class="tool-group">${button('tool:select', '', 'pointer', `tool-button ${tool === 'select' ? 'active' : ''}`, 'aria-label="Select and move dimensions" title="Select and move (Esc)"')}${button('tool:pan', '', 'hand', `tool-button ${tool === 'pan' ? 'active' : ''}`, 'aria-label="Pan drawing" title="Pan (Space + drag or middle mouse)"')}${button('auto-dimensions', 'Auto dimensions', 'dimension', 'quiet', !part || busy ? 'disabled' : '')}${button('arrange-dimensions', 'Arrange', 'layers', 'quiet', !part || busy ? 'disabled title="Arrange dimension lines"' : 'title="Place smaller dimensions inside larger ones"')}<span class="toolbar-divider"></span><select id="measure-tool" aria-label="Add dimension" ${!part || busy ? 'disabled' : ''}>${option('select', 'Add dimension…', tool)}${option('horizontal', 'Horizontal', tool)}${option('vertical', 'Vertical', tool)}${option('aligned', 'Aligned', tool)}${option('diameter', 'Diameter', tool)}${option('radius', 'Radius', tool)}${option('angle', 'Angle', tool)}</select></div>
+          <div class="tool-group">${button('undo', '', 'undo', 'icon-button', `aria-label="Undo" title="Undo (Ctrl/⌘ Z)" ${!history()?.canUndo ? 'disabled' : ''}`)}${button('redo', '', 'redo', 'icon-button', `aria-label="Redo" title="Redo (Ctrl/⌘ Shift Z)" ${!history()?.canRedo ? 'disabled' : ''}`)}<span class="toolbar-divider"></span>${button('fit', '', 'fit', 'icon-button', 'aria-label="Fit sheet" title="Fit sheet (0)"')}${button('zoom-out', '', 'minus', 'icon-button', 'aria-label="Zoom out" title="Zoom out (-)"')}<select id="zoom" aria-label="Sheet zoom">${zoomOptions()}</select>${button('zoom-in', '', 'plus', 'icon-button', 'aria-label="Zoom in" title="Zoom in (+)"')}</div>
         </div>
-        <div class="canvas-area ${tool !== 'select' ? 'measuring' : ''}" id="canvas-area"><div class="drop-overlay">${icon('upload')}Drop STEP files to import</div><div id="paper-host"></div>${!part ? views.renderEmpty() : ''}</div>
-        <div class="canvas-status"><span id="tool-hint">${toolHint()}</span><span>${part ? `${state.settings.format} · ${state.settings.orientation} · mm` : 'STEP / STP · Multiple files supported'}</span></div>
+        <div class="canvas-area ${!['select', 'pan'].includes(tool) ? 'measuring' : ''}" id="canvas-area" tabindex="0" aria-label="Drawing canvas. Wheel to zoom, drag empty space to pan."><div class="drop-overlay">${icon('upload')}Drop STEP files to import</div><div id="paper-host"></div>${!part ? views.renderEmpty() : ''}</div>
+        <div class="canvas-status"><span id="tool-hint">${e(canvasHint)}</span><span>${part ? `${state.settings.format} · ${state.settings.orientation} · mm` : 'STEP / STP · Multiple files supported'}</span></div>
       </main>
       <aside class="inspector" aria-label="Drawing properties">
-        <div class="inspector-tabs" role="tablist">${['sheet', 'details', 'dimensions'].map((t) => `<button role="tab" aria-selected="${inspectorTab === t}" data-action="tab:${t}" class="${inspectorTab === t ? 'active' : ''}">${t[0].toUpperCase() + t.slice(1)}</button>`).join('')}</div>
+        <div class="inspector-tabs" role="tablist">${['sheet', 'details', 'dimensions'].map((t) => `<button role="tab" aria-selected="${inspectorTab === t}" data-action="tab:${t}" class="${inspectorTab === t ? 'active' : ''}">${t === 'details' ? 'Title block' : t[0].toUpperCase() + t.slice(1)}</button>`).join('')}</div>
         <div class="inspector-body">${views.renderInspector()}</div>
         <div class="review-note">${icon('info')}<p><strong>Review before manufacture</strong>Automatic dimensions are a starting point. Confirm features, tolerances, fits and sections.</p></div>
       </aside>
@@ -119,100 +194,166 @@ function render(): void {
     <div id="busy-overlay" class="busy-overlay ${busy ? 'visible' : ''}" role="status" aria-live="polite"><div class="busy-card"><span class="spinner"></span><strong>${busyOperation === 'export' ? 'Exporting your PDF' : 'Preparing your drawing'}</strong><p id="progress-message">${e(progress)}</p>${busyOperation === 'import' ? button('cancel', 'Cancel', undefined, 'secondary') : ''}</div></div>
     <div id="toast" class="toast ${notification ? 'visible' : ''}" role="status" aria-live="polite">${e(notification)}</div>
     ${helpOpen ? views.renderHelp() : ''}`;
+  if (retainedCanvas) app.querySelector('#canvas-area')!.replaceWith(retainedCanvas);
+  const canvas = app.querySelector<HTMLElement>('#canvas-area')!;
+  const empty = canvas.querySelector('.empty-workspace');
+  if (part) empty?.remove();
+  else if (!empty) canvas.insertAdjacentHTML('beforeend', views.renderEmpty());
+  drawingCanvas.attach(canvas);
+  drawingCanvas.setEnabled(!busy && !helpOpen);
+  drawingCanvas.setTool(tool);
   renderPaper();
-  canvasResizeObserver.disconnect();
-  const canvas = document.querySelector('#canvas-area');
-  if (canvas) canvasResizeObserver.observe(canvas);
+  updateCacheStatus();
 }
 
-function toolHint(): string {
-  if (tool === 'select')
-    return active()
-      ? 'Select a dimension to edit · Drag a label to move · Delete to remove'
-      : 'Drop STEP files anywhere in the workspace';
-  if (tool === 'diameter' || tool === 'radius')
-    return `Click a circular edge in an orthographic view · Esc to cancel`;
-  if (tool === 'angle')
-    return pendingEdge
-      ? 'Click the second straight edge in the same view'
-      : 'Click two straight edges to measure an angle';
-  return pendingPoint
-    ? 'Click the second snap point in the same view'
-    : 'Click a straight edge, or two snap points · Esc to cancel';
+function updateCacheStatus(): void {
+  const status = app.querySelector('#title-block-cache-status');
+  if (status)
+    status.textContent = titleBlockCached
+      ? 'Saved automatically in this browser and reused for your next drawing.'
+      : 'Session only. Browser storage is unavailable. Save a project to keep these fields.';
+}
+function cacheTitleBlock(): void {
+  titleBlockCached = saveTitleBlockCache(titleBlockStorage, state.settings);
+  updateCacheStatus();
 }
 
 function renderPaper(): void {
-  const part = active(),
-    host = document.querySelector<HTMLDivElement>('#paper-host');
-  if (!part || !host) {
-    rendered = undefined;
+  const part = active();
+  const layout = part ? getPartLayout(part) : undefined;
+  rendered = drawingCanvas.setDocument(
+    part
+      ? {
+          part,
+          dimensions: dims(),
+          settings: state.settings,
+          layout: layout!,
+          selectedDimension,
+        }
+      : undefined,
+  );
+  if (!part || !rendered) {
+    canvasHint = 'Drop STEP files anywhere in the workspace';
     return;
   }
-  rendered = renderDrawing(part, dims(), state.settings, selectedDimension, drag?.layout);
-  host.innerHTML = rendered.svg;
-  host.className = 'paper-host';
-  host.style.setProperty('--zoom', String(zoom));
-  host.style.setProperty('--paper-ratio', String(rendered.width / rendered.height));
-  const canvas = document.querySelector<HTMLElement>('#canvas-area');
-  if (canvas) {
-    const style = getComputedStyle(canvas);
-    const availableWidth =
-      canvas.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
-    const availableHeight =
-      canvas.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
-    const fitWidth = Math.max(
-      80,
-      Math.min(availableWidth, (availableHeight * rendered.width) / rendered.height),
-    );
-    host.style.width = `${fitWidth * zoom}px`;
-  }
-  const svg = host.querySelector('svg');
-  if (svg) {
-    svg.setAttribute('aria-label', `Technical drawing of ${part.name}`);
-    svg.setAttribute('role', 'img');
-  }
-  const stats = document.querySelector('#sheet-stats');
+  const stats = app.querySelector('#sheet-stats');
+  const titleWarning = app.querySelector('#title-block-warning');
+  if (titleWarning)
+    titleWarning.innerHTML = rendered.warnings
+      .filter((w) => /title block|shortened|technical note/i.test(w))
+      .map((w) => `<p class="layout-warning">${e(w)}</p>`)
+      .join('');
+  const warning = app.querySelector('#dimension-layout-warning');
+  if (warning)
+    warning.innerHTML = rendered.warnings
+      .filter((w) => w.startsWith('Dimensions exceed') || w.startsWith('The selected scale'))
+      .map((w) => `<p class="layout-warning">${e(w)}</p>`)
+      .join('');
   if (stats)
-    stats.innerHTML = `<dl><dt>Views</dt><dd>4 · First angle</dd><dt>Sheet size</dt><dd>${rendered.width} × ${rendered.height} mm</dd><dt>Scale</dt><dd>${rendered.scale >= 1 ? `${+rendered.scale.toFixed(3)}:1` : `1:${+(1 / rendered.scale).toFixed(3)}`}</dd><dt>Dimensions</dt><dd>${dims().length}</dd></dl>${rendered.warnings?.map((w) => `<p class="layout-warning">${e(w)}</p>`).join('') ?? ''}`;
+    stats.innerHTML = `<dl><dt>Views</dt><dd>4 · First angle</dd><dt>Sheet size</dt><dd>${rendered.width} × ${rendered.height} mm</dd><dt>Scale</dt><dd>${rendered.scale >= 1 ? `${+rendered.scale.toFixed(3)}:1` : `1:${+(1 / rendered.scale).toFixed(3)}`}</dd><dt>Dimensions</dt><dd>${dims().length}</dd></dl>${rendered.warnings.map((w) => `<p class="layout-warning">${e(w)}</p>`).join('')}`;
 }
 
 function updateProgress(): void {
   const el = document.querySelector('#progress-message');
   if (el) el.textContent = progress;
 }
-function setTool(value: typeof tool): void {
+function setTool(value: CanvasTool): void {
   tool = value;
-  pendingPoint = undefined;
-  pendingEdge = undefined;
   selectedDimension = undefined;
+  drawingCanvas.setTool(value);
   render();
 }
-function changeDimensions(next: Dimension[]): void {
-  history()?.record(dims());
+function changeDimensions(next: Dimension[], arrange = false): void {
+  history()?.record({ dimensions: dims(), layout: state.layouts[state.activeId!] });
+  if (arrange) {
+    delete state.layouts[state.activeId!];
+    pendingArrangement.add(state.activeId!);
+  }
   state.dimensions[state.activeId!] = next;
   render();
 }
 
+function controlSettingValue(
+  control: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement,
+  key: keyof DrawingSettings,
+): string | number | boolean {
+  if (control instanceof HTMLInputElement && control.type === 'checkbox') return control.checked;
+  if (key === 'precision' || (key === 'scale' && control.value !== 'auto'))
+    return Number(control.value);
+  if (Object.hasOwn(titleBlockDefaults, key)) {
+    const text = cleanTitleBlockText(control.value).slice(0, key === 'notes' ? 10000 : 1024);
+    if (text !== control.value) control.value = text;
+  }
+  return control.value;
+}
 function syncSettingsFromControls(): void {
   for (const control of app.querySelectorAll<
     HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement
   >('[data-setting]')) {
     const key = control.dataset.setting as keyof DrawingSettings;
-    const value =
-      control instanceof HTMLInputElement && control.type === 'checkbox'
-        ? control.checked
-        : key === 'precision'
-          ? Number(control.value)
-          : key === 'scale' && control.value !== 'auto'
-            ? Number(control.value)
-            : control.value;
-    (state.settings as any)[key] = value;
+    (state.settings as any)[key] = controlSettingValue(control, key);
   }
+  normalizeSheetOrientation();
+  cacheTitleBlock();
+}
+
+function normalizeSheetOrientation(): void {
+  const eskd = state.settings.template === 'eskd' || state.settings.template === 'eskd-uk';
+  if (eskd && state.settings.format === 'A4') state.settings.orientation = 'portrait';
 }
 
 let paperUpdateTimer: ReturnType<typeof setTimeout> | undefined;
+let dimensionInputSession: { element: HTMLInputElement; recorded: boolean } | undefined;
+function updateDimensionControl(control: HTMLInputElement): void {
+  const key = control.dataset.dimensionSetting as 'offset' | 'prefix' | 'suffix' | undefined;
+  if (!key || !selectedDimension) return;
+  const current = dims().find((d) => d.id === selectedDimension);
+  if (!current) return;
+  const value = key === 'offset' ? Number(control.value) : control.value.slice(0, 120);
+  if (
+    key === 'offset' &&
+    (control.value === '' || !Number.isFinite(value) || Math.abs(Number(value)) > 1000)
+  )
+    return;
+  if (current[key] === value) return;
+  if (!dimensionInputSession || dimensionInputSession.element !== control)
+    dimensionInputSession = { element: control, recorded: false };
+  if (!dimensionInputSession.recorded) {
+    history()?.record({ dimensions: dims(), layout: state.layouts[state.activeId!] });
+    dimensionInputSession.recorded = true;
+  }
+  const next = structuredClone(dims()),
+    dimension = next.find((d) => d.id === selectedDimension)!;
+  if (key === 'offset') dimension.offset = Number(value);
+  else dimension[key] = String(value);
+  state.dimensions[state.activeId!] = next;
+  clearTimeout(paperUpdateTimer);
+  paperUpdateTimer = setTimeout(renderPaper, 80);
+  const undo = app.querySelector<HTMLButtonElement>('[data-action="undo"]'),
+    redo = app.querySelector<HTMLButtonElement>('[data-action="redo"]');
+  if (undo) undo.disabled = false;
+  if (redo) redo.disabled = true;
+}
+app.addEventListener('focusout', (event) => {
+  const control = event.target as HTMLInputElement;
+  if (
+    control.dataset.dimensionSetting === 'offset' &&
+    (control.value === '' ||
+      !Number.isFinite(Number(control.value)) ||
+      Math.abs(Number(control.value)) > 1000)
+  ) {
+    const dimension = dims().find((d) => d.id === selectedDimension);
+    if (dimension) control.value = dimension.offset.toFixed(1);
+    toast('Use an offset between -1000 and 1000 mm.');
+  }
+  if (control.dataset.dimensionSetting) dimensionInputSession = undefined;
+});
 app.addEventListener('input', (event) => {
   const control = event.target as HTMLInputElement | HTMLTextAreaElement;
+  if (control instanceof HTMLInputElement && control.dataset.dimensionSetting) {
+    updateDimensionControl(control);
+    return;
+  }
   if (!control.matches('input[data-setting]:not([type="checkbox"]),textarea[data-setting]')) return;
   syncSettingsFromControls();
   clearTimeout(paperUpdateTimer);
@@ -251,6 +392,7 @@ async function importFiles(files: File[]): Promise<void> {
           state.parts.push(part);
           state.selected.add(part.id);
           state.dimensions[part.id] = autoDimensions(part);
+          pendingArrangement.add(part.id);
           firstAddedId ??= part.id;
           added++;
         }
@@ -264,8 +406,6 @@ async function importFiles(files: File[]): Promise<void> {
       busy = false;
       if (firstAddedId) {
         state.activeId = firstAddedId;
-        pendingPoint = undefined;
-        pendingEdge = undefined;
         selectedDimension = undefined;
         tool = 'select';
       }
@@ -294,6 +434,7 @@ async function loadDemo(): Promise<void> {
       state.parts.push(part);
       state.selected.add(part.id);
       state.dimensions[part.id] = autoDimensions(part);
+      pendingArrangement.add(part.id);
       state.activeId = part.id;
     }
     toast('Example ready. Try moving a dimension or changing the sheet format.');
@@ -320,11 +461,15 @@ async function exportDrawing(): Promise<void> {
   try {
     const { exportPdf } = await import('./drawing/pdf');
     await exportPdf(
-      parts.map((part) => ({
-        part,
-        dimensions: state.dimensions[part.id] ?? [],
-        settings: state.settings,
-      })),
+      parts.map((part) => {
+        const layout = getPartLayout(part);
+        return {
+          part,
+          dimensions: state.dimensions[part.id] ?? [],
+          settings: state.settings,
+          layout,
+        };
+      }),
       parts.length === 1 ? `${safeName(parts[0].name)}.pdf` : 'techdraw-drawing-set.pdf',
     );
     toast('PDF exported. Print at actual size to preserve scale.');
@@ -339,6 +484,7 @@ const safeName = (name: string) => name.replace(/[^a-z0-9_.-]+/gi, '-').slice(0,
 
 function saveProject(): void {
   try {
+    for (const part of state.parts) getPartLayout(part);
     downloadBlob(
       new Blob([serializeProject(state)], { type: 'application/json' }),
       'workspace.techdraw.json',
@@ -356,15 +502,25 @@ async function openProject(file: File): Promise<void> {
   }
   try {
     const data = parseProject(await file.text());
+    const savedOrientation = data.settings.orientation;
     state.parts = data.parts;
     state.settings = data.settings;
+    normalizeSheetOrientation();
     state.dimensions = data.dimensions;
+    state.layouts = savedOrientation === state.settings.orientation ? data.layouts : {};
+    cacheTitleBlock();
+    pendingArrangement.clear();
+    layoutSettingsKey = JSON.stringify([
+      state.settings.format,
+      state.settings.orientation,
+      state.settings.template,
+      state.settings.scale,
+    ]);
+    drawingCanvas.cancel();
     state.activeId = state.parts[0].id;
     state.selected = new Set(data.selected);
     histories.clear();
     selectedDimension = undefined;
-    pendingPoint = undefined;
-    pendingEdge = undefined;
     tool = 'select';
     render();
     toast('Editable project opened.');
@@ -376,115 +532,9 @@ async function openProject(file: File): Promise<void> {
 function addDimension(d: Dimension): void {
   tool = 'select';
   selectedDimension = d.id;
-  pendingPoint = undefined;
-  pendingEdge = undefined;
   inspectorTab = 'dimensions';
-  changeDimensions(
-    arrangeDimensions([...dims(), d], {
-      scale: rendered?.scale,
-      precision: state.settings.precision,
-      part: active(),
-    }),
-  );
-  toast('Dimension added. Drag its label to position it.');
-}
-
-function handleGeometryClick(target: Element): void {
-  if (tool === 'select' || !active()) return;
-  const edgeEl = target.closest<SVGElement>('[data-edge-id]');
-  const anchorEl = target.closest<SVGElement>('[data-anchor-id]');
-  const viewId = (target.closest('[data-view-id]')?.getAttribute('data-view-id') ??
-    edgeEl?.getAttribute('data-view-id') ??
-    anchorEl?.getAttribute('data-view-id')) as ViewId;
-  if (!viewId || viewId === 'iso') {
-    toast('Add dimensions in the front, top or right view.');
-    return;
-  }
-  const view = active()!.views.find((v) => v.id === viewId)!;
-  if (anchorEl && ['horizontal', 'vertical', 'aligned'].includes(tool)) {
-    const point: Point2 = [Number(anchorEl.dataset.modelX), Number(anchorEl.dataset.modelY)];
-    if (!point.every(Number.isFinite)) return;
-    const source = view.anchors?.find((a) => a.id === anchorEl.dataset.anchorId)?.source;
-    if (pendingPoint && pendingPoint.viewId === viewId) {
-      try {
-        addDimension(
-          createLinearDimension(
-            viewId,
-            pendingPoint.point,
-            point,
-            tool as DimensionKind,
-            pendingPoint.source,
-            source,
-          ),
-        );
-      } catch (err) {
-        pendingPoint = undefined;
-        toast(errorMessage(err));
-      }
-    } else {
-      pendingPoint = { viewId, point, source };
-      document.querySelector('#tool-hint')!.textContent = toolHint();
-      toast('First point selected. Choose the second point in the same view.');
-    }
-    return;
-  }
-  if (!edgeEl) return;
-  const edge = view.edges.find((x) => x.id === edgeEl.dataset.edgeId);
-  if (!edge) return;
-  if (tool === 'diameter' || tool === 'radius') {
-    if (edge.kind !== 'circle' || !edge.center || !edge.radius) {
-      toast('Choose an edge recognized as a circular arc or circle.');
-      return;
-    }
-    addDimension({
-      id: crypto.randomUUID(),
-      viewId,
-      kind: tool,
-      a: [...edge.center],
-      b:
-        tool === 'radius'
-          ? [...edge.points[Math.floor(edge.points.length / 2)]]
-          : [edge.center[0] + edge.radius, edge.center[1]],
-      value: edge.radius * (tool === 'diameter' ? 2 : 1),
-      offset: 10,
-      automatic: false,
-    });
-    return;
-  }
-  if (edge.kind !== 'line' || edge.points.length < 2) {
-    toast('Choose a straight edge or use two snap points.');
-    return;
-  }
-  if (tool === 'angle') {
-    if (!pendingEdge || pendingEdge.viewId !== viewId) {
-      pendingEdge = { viewId, edge };
-      document.querySelector('#tool-hint')!.textContent = toolHint();
-      toast('First edge selected. Choose the second straight edge.');
-      return;
-    }
-    try {
-      addDimension(measureAngle(viewId, pendingEdge.edge, edge));
-    } catch (err) {
-      pendingEdge = undefined;
-      toast(errorMessage(err));
-    }
-    return;
-  }
-  try {
-    addDimension(
-      createLinearDimension(
-        viewId,
-        edge.points[0],
-        edge.points.at(-1)!,
-        tool,
-        edge.sourcePoints?.[0],
-        edge.sourcePoints?.at(-1),
-        edge.length,
-      ),
-    );
-  } catch (err) {
-    toast(errorMessage(err));
-  }
+  changeDimensions([...dims(), d]);
+  toast('Dimension added. Drag its label or line to adjust it.');
 }
 
 app.addEventListener('click', (event) => {
@@ -507,13 +557,29 @@ app.addEventListener('click', (event) => {
       helpOpen = true;
       render();
       document.querySelector<HTMLButtonElement>('[data-action="close-help"]')?.focus();
+    } else if (action === 'clear-title-block') {
+      Object.assign(state.settings, titleBlockDefaults);
+      const cleared = clearTitleBlockCache(titleBlockStorage);
+      titleBlockCached = cleared;
+      render();
+      toast(
+        cleared
+          ? 'Title block cleared. Ready for a new part.'
+          : 'Title block cleared. Browser storage is unavailable.',
+      );
     } else if (action === 'close-help') {
       helpOpen = false;
       render();
     } else if (action === 'export-pdf') void exportDrawing();
     else if (action === 'export-svg' && rendered)
       downloadBlob(
-        new Blob([rendered.svg], { type: 'image/svg+xml' }),
+        new Blob(
+          [
+            renderDrawing(active()!, dims(), state.settings, undefined, getPartLayout(active()!))
+              .svg,
+          ],
+          { type: 'image/svg+xml' },
+        ),
         `${safeName(active()!.name)}.svg`,
       );
     else if (action === 'save-project') saveProject();
@@ -526,25 +592,27 @@ app.addEventListener('click', (event) => {
           : new Set(state.parts.map((p) => p.id));
       render();
     } else if (action === 'fit') {
-      zoom = 1;
-      render();
-    } else if (action === 'auto-dimensions' && active()) {
+      drawingCanvas.fit();
+    } else if (action === 'zoom-in') drawingCanvas.zoomBy(1.25);
+    else if (action === 'zoom-out') drawingCanvas.zoomBy(1 / 1.25);
+    else if (action === 'auto-dimensions' && active()) {
       selectedDimension = undefined;
-      changeDimensions(autoDimensions(active()!, autoDetail));
+      drawingCanvas.cancel();
+      changeDimensions(autoDimensions(active()!, autoDetail), true);
       toast('Automatic dimensions regenerated. Undo restores the previous set.');
     } else if (action === 'arrange-dimensions' && active()) {
-      changeDimensions(
-        arrangeDimensions(dims(), {
-          scale: rendered?.scale,
-          precision: state.settings.precision,
-          part: active(),
-        }),
-      );
+      drawingCanvas.cancel();
+      changeDimensions(dims(), true);
       toast('Dimension lines arranged from smaller to larger.');
     } else if (action === 'undo' || action === 'redo') {
-      const result = action === 'undo' ? history()?.undo(dims()) : history()?.redo(dims());
+      drawingCanvas.cancel();
+      const snapshot = { dimensions: dims(), layout: state.layouts[state.activeId!] };
+      const result = action === 'undo' ? history()?.undo(snapshot) : history()?.redo(snapshot);
       if (result) {
-        state.dimensions[state.activeId!] = result;
+        pendingArrangement.delete(state.activeId!);
+        state.dimensions[state.activeId!] = result.dimensions;
+        if (result.layout) state.layouts[state.activeId!] = result.layout;
+        else delete state.layouts[state.activeId!];
         selectedDimension = undefined;
         render();
       }
@@ -556,8 +624,6 @@ app.addEventListener('click', (event) => {
       importToken++;
       cad.reset();
       state.activeId ??= state.parts[0]?.id ?? null;
-      pendingPoint = undefined;
-      pendingEdge = undefined;
       tool = 'select';
       busy = false;
       render();
@@ -566,6 +632,7 @@ app.addEventListener('click', (event) => {
       inspectorTab = action.slice(4);
       render();
     } else if (action === 'tool:select') setTool('select');
+    else if (action === 'tool:pan') setTool('pan');
     return;
   }
   const removeId = target.closest<HTMLElement>('[data-remove-part]')?.dataset.removePart;
@@ -573,34 +640,33 @@ app.addEventListener('click', (event) => {
     state.parts = state.parts.filter((p) => p.id !== removeId);
     state.selected.delete(removeId);
     delete state.dimensions[removeId];
+    delete state.layouts[removeId];
+    pendingArrangement.delete(removeId);
+    drawingCanvas.cancel();
     histories.delete(removeId);
     if (state.activeId === removeId) state.activeId = state.parts[0]?.id ?? null;
     selectedDimension = undefined;
-    pendingPoint = undefined;
-    pendingEdge = undefined;
     tool = 'select';
     render();
     return;
   }
   const partId = target.closest<HTMLElement>('[data-part-id]')?.dataset.partId;
   if (partId) {
+    drawingCanvas.cancel();
     state.activeId = partId;
     selectedDimension = undefined;
-    pendingPoint = undefined;
-    pendingEdge = undefined;
     render();
     return;
   }
   const dimensionId =
-    target.closest<HTMLElement>('[data-dimension-select]')?.dataset.dimensionSelect ??
-    target.closest<SVGElement>('[data-dimension-id]')?.dataset.dimensionId;
-  if (dimensionId && tool === 'select') {
+    target.closest<HTMLElement>('[data-dimension-select]')?.dataset.dimensionSelect;
+  if (dimensionId) {
     selectedDimension = dimensionId;
     inspectorTab = 'dimensions';
+    tool = 'select';
+    drawingCanvas.setTool('select');
     render();
-    return;
   }
-  if (target.closest('#paper-host')) handleGeometryClick(target);
 });
 
 app.addEventListener('change', (event) => {
@@ -624,13 +690,13 @@ app.addEventListener('change', (event) => {
     autoDetail = target.value as typeof autoDetail;
     if (active()) {
       selectedDimension = undefined;
-      changeDimensions(autoDimensions(active()!, autoDetail));
+      drawingCanvas.cancel();
+      changeDimensions(autoDimensions(active()!, autoDetail), true);
     }
     return;
   }
   if (target.id === 'zoom') {
-    zoom = Number(target.value);
-    renderPaper();
+    drawingCanvas.setZoom(Number(target.value));
     return;
   }
   if (target.dataset.partCheck) {
@@ -641,41 +707,17 @@ app.addEventListener('change', (event) => {
   }
   const key = target.dataset.setting as keyof DrawingSettings | undefined;
   if (key) {
-    const value =
-      target.type === 'checkbox'
-        ? target.checked
-        : key === 'precision'
-          ? Number(target.value)
-          : key === 'scale' && target.value !== 'auto'
-            ? Number(target.value)
-            : target.value;
-    (state.settings as any)[key] = value;
-    renderPaper();
+    (state.settings as any)[key] = controlSettingValue(target, key);
+    normalizeSheetOrientation();
+    cacheTitleBlock();
+    if (key === 'format' || key === 'template' || key === 'orientation') render();
+    else renderPaper();
     const status = document.querySelector('.canvas-status > span:last-child');
     if (status && active())
       status.textContent = `${state.settings.format} · ${state.settings.orientation} · mm`;
     return;
   }
-  if (target.dataset.dimensionSetting && selectedDimension) {
-    const key = target.dataset.dimensionSetting as 'offset' | 'prefix' | 'suffix';
-    const next = structuredClone(dims());
-    const d = next.find((x) => x.id === selectedDimension)!;
-    if (key === 'offset') {
-      const n = Number(target.value);
-      if (!Number.isFinite(n) || Math.abs(n) > 1000) {
-        toast('Use an offset between -1000 and 1000 mm.');
-        return;
-      }
-      d.offset = n;
-    } else d[key] = target.value.slice(0, 120);
-    history()?.record(dims());
-    state.dimensions[state.activeId!] = next;
-    renderPaper();
-    const undoButton = document.querySelector<HTMLButtonElement>('[data-action="undo"]');
-    const redoButton = document.querySelector<HTMLButtonElement>('[data-action="redo"]');
-    if (undoButton) undoButton.disabled = false;
-    if (redoButton) redoButton.disabled = true;
-  }
+  if (target.dataset.dimensionSetting && selectedDimension) updateDimensionControl(target);
 });
 
 app.addEventListener(
@@ -689,91 +731,6 @@ app.addEventListener(
   },
   true,
 );
-
-let drag:
-  | {
-      id: string;
-      start: Point2;
-      initial: Point2;
-      old: Dimension[];
-      initialOffset: number;
-      layout?: Pick<ReturnType<typeof renderDrawing>, 'scale' | 'viewTransforms'>;
-      moved: boolean;
-      pointerId: number;
-    }
-  | undefined;
-app.addEventListener('pointerdown', (event) => {
-  if (tool !== 'select' || busy) return;
-  const target = event.target as Element,
-    el = target.closest<SVGElement>('[data-dimension-id]');
-  if (!el) return;
-  const dimension = dims().find((d) => d.id === el.dataset.dimensionId);
-  if (!dimension) return;
-  const point = sheetPoint(event);
-  if (!point) return;
-  drag = {
-    id: dimension.id,
-    start: point,
-    initial: dimension.textOffset ?? [0, 0],
-    old: structuredClone(dims()),
-    initialOffset: dimension.offset,
-    layout: rendered
-      ? { scale: rendered.scale, viewTransforms: rendered.viewTransforms }
-      : undefined,
-    moved: false,
-    pointerId: event.pointerId,
-  };
-  (event.target as Element).setPointerCapture?.(event.pointerId);
-});
-window.addEventListener('pointermove', (event) => {
-  if (!drag) return;
-  const point = sheetPoint(event);
-  if (!point) return;
-  const dx = point[0] - drag.start[0],
-    dy = point[1] - drag.start[1];
-  if (Math.hypot(dx, dy) < 0.4 && !drag.moved) return;
-  drag.moved = true;
-  const d = dims().find((x) => x.id === drag!.id);
-  if (d) {
-    if (d.kind === 'horizontal') d.offset = drag.initialOffset + dy;
-    else if (d.kind === 'vertical') d.offset = drag.initialOffset - dx;
-    else if (d.kind === 'aligned') {
-      const vx = d.b[0] - d.a[0],
-        vy = -(d.b[1] - d.a[1]),
-        length = Math.hypot(vx, vy) || 1;
-      d.offset = drag.initialOffset + (-vy * dx + vx * dy) / length;
-    } else if (d.kind === 'angle' && d.vertex && rendered) {
-      const t = rendered.viewTransforms[d.viewId],
-        cx = t.x + d.vertex[0] * t.scale,
-        cy = t.y - d.vertex[1] * t.scale;
-      d.offset = Math.max(
-        6,
-        drag.initialOffset +
-          Math.hypot(point[0] - cx, point[1] - cy) -
-          Math.hypot(drag.start[0] - cx, drag.start[1] - cy),
-      );
-    } else d.textOffset = [drag.initial[0] + dx, drag.initial[1] + dy];
-    selectedDimension = d.id;
-    renderPaper();
-  }
-});
-window.addEventListener('pointerup', () => {
-  const finished = drag;
-  drag = undefined;
-  if (finished?.moved) {
-    history()?.record(finished.old);
-    inspectorTab = 'dimensions';
-    render();
-  }
-});
-function sheetPoint(event: PointerEvent): Point2 | undefined {
-  const svg = document.querySelector<SVGSVGElement>('#paper-host svg');
-  if (!svg) return;
-  const matrix = svg.getScreenCTM();
-  if (!matrix) return;
-  const p = new DOMPoint(event.clientX, event.clientY).matrixTransform(matrix.inverse());
-  return [p.x, p.y];
-}
 
 let dragDepth = 0;
 window.addEventListener('dragenter', (event) => {
@@ -818,10 +775,31 @@ window.addEventListener('keydown', (event) => {
   const editing = (event.target as Element)?.matches('input,textarea,select');
   if (event.key === 'Escape') {
     helpOpen = false;
+    drawingCanvas.cancel();
     setTool('select');
     return;
   }
   if (editing) return;
+  if (event.code === 'Space') {
+    event.preventDefault();
+    drawingCanvas.setPanKey(true);
+    return;
+  }
+  if (event.key === '+' || event.key === '=') {
+    event.preventDefault();
+    drawingCanvas.zoomBy(1.25);
+    return;
+  }
+  if (event.key === '-') {
+    event.preventDefault();
+    drawingCanvas.zoomBy(1 / 1.25);
+    return;
+  }
+  if (event.key === '0') {
+    event.preventDefault();
+    drawingCanvas.fit();
+    return;
+  }
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') {
     event.preventDefault();
     document
@@ -833,13 +811,10 @@ window.addEventListener('keydown', (event) => {
     document.querySelector<HTMLButtonElement>('[data-action="delete-dimension"]')?.click();
   }
 });
-window.addEventListener('pointercancel', () => {
-  if (drag) {
-    state.dimensions[state.activeId!] = drag.old;
-    drag = undefined;
-    render();
-  }
+window.addEventListener('keyup', (event) => {
+  if (event.code === 'Space') drawingCanvas.setPanKey(false);
 });
+window.addEventListener('blur', () => drawingCanvas.setPanKey(false));
 window.addEventListener('beforeunload', (event) => {
   if (state.parts.length) {
     event.preventDefault();

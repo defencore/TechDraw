@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import type { Part, Projection } from '../src/model';
+import type { DrawingLayout, Part, Projection } from '../src/model';
 import { parseProject, serializeProject } from '../src/project';
 import { defaultSettings, type WorkspaceState } from '../src/state';
 
@@ -42,6 +42,7 @@ function workspace(): WorkspaceState {
     activeId: part.id,
     selected: new Set([part.id]),
     settings: { ...defaultSettings },
+    layouts: {},
     dimensions: {
       [part.id]: [
         {
@@ -60,11 +61,116 @@ function workspace(): WorkspaceState {
 }
 const source = () => JSON.parse(serializeProject(workspace()));
 
+function fixedLayout(): DrawingLayout {
+  return {
+    scale: 0.5,
+    viewTransforms: {
+      front: { x: 205.123456789, y: 71.25, scale: 0.5 },
+      top: { x: 205.123456789, y: 153.875, scale: 0.5 },
+      right: { x: 80.5, y: 71.25, scale: 0.5 },
+      iso: { x: 75.875, y: 151.25, scale: 0.5 },
+    },
+  };
+}
+
+test('sheet layout survives project roundtrip and manual dimension changes without reflow', () => {
+  const state = workspace();
+  state.layouts['part-1'] = fixedLayout();
+  state.dimensions['part-1'][0].offset = 27.125;
+  state.dimensions['part-1'][0].textOffset = [13.25, -5.75];
+  const reopened = parseProject(serializeProject(state));
+  assert.deepEqual(reopened.layouts['part-1'], fixedLayout());
+  assert.equal(reopened.dimensions['part-1'][0].offset, 27.125);
+  assert.deepEqual(reopened.dimensions['part-1'][0].textOffset, [13.25, -5.75]);
+  assert.notEqual(reopened.layouts['part-1'], state.layouts['part-1']);
+  assert.notEqual(
+    reopened.layouts['part-1'].viewTransforms,
+    state.layouts['part-1'].viewTransforms,
+  );
+});
+
+test('projects without saved layout metadata remain editable', () => {
+  const project = source();
+  delete project.layouts;
+  assert.deepEqual(Object.keys(parseProject(JSON.stringify(project)).layouts), []);
+});
+
+test('invalid, inconsistent or orphan view layouts are rejected before rendering', () => {
+  const mutations = [
+    (p: any) => {
+      p.layouts.orphan = fixedLayout();
+    },
+    (p: any) => {
+      p.layouts['part-1'].scale = 0;
+    },
+    (p: any) => {
+      p.layouts['part-1'].scale = -1;
+    },
+    (p: any) => {
+      p.layouts['part-1'].scale = 1e6 + 1;
+    },
+    (p: any) => {
+      p.layouts['part-1'].scale = Infinity;
+    },
+    (p: any) => {
+      p.layouts['part-1'].viewTransforms.front.x = Infinity;
+    },
+    (p: any) => {
+      p.layouts['part-1'].viewTransforms.front.y = -1e9 - 1;
+    },
+    (p: any) => {
+      p.layouts['part-1'].viewTransforms.front.scale = 0.25;
+    },
+    (p: any) => {
+      delete p.layouts['part-1'].viewTransforms.top;
+    },
+    (p: any) => {
+      p.layouts['part-1'].viewTransforms.back = { x: 0, y: 0, scale: 0.5 };
+    },
+    (p: any) => {
+      p.layouts['part-1'].viewTransforms.iso = [0, 0, 0.5];
+    },
+    (p: any) => {
+      p.layouts['part-1'].viewTransforms = null;
+    },
+    (p: any) => {
+      p.layouts = [];
+    },
+  ];
+  for (const mutate of mutations) {
+    const project = source();
+    project.layouts['part-1'] = fixedLayout();
+    mutate(project);
+    assert.throws(() => parseProject(JSON.stringify(project)), /Invalid project/);
+  }
+});
+
+test('layout parsing keeps only supported geometry fields in fresh objects', () => {
+  const project = source();
+  project.layouts['part-1'] = { ...fixedLayout(), width: 'untrusted', onload: 'alert(1)' };
+  project.layouts['part-1'].viewTransforms.front.style = 'url(javascript:alert(1))';
+  Object.defineProperty(project.layouts['part-1'].viewTransforms.front, '__proto__', {
+    value: { polluted: true },
+    enumerable: true,
+  });
+  const parsed = parseProject(JSON.stringify(project)).layouts['part-1'];
+  assert.deepEqual(parsed, fixedLayout());
+  assert.equal(Object.hasOwn(parsed, 'onload'), false);
+  assert.equal(Object.hasOwn(parsed.viewTransforms.front, '__proto__'), false);
+  assert.equal(({} as Record<string, unknown>).polluted, undefined);
+});
+
 test('editable project roundtrip preserves precision, selection, annotations and settings', () => {
   const state = workspace();
   state.dimensions['part-1'][0].suffix = ' ±0.05';
   state.dimensions['part-1'][0].textOffset = [3.25, -2];
   state.settings.notes = 'Deburr all edges.\nDo not scale the drawing.';
+  state.settings.template = 'eskd-uk';
+  state.settings.organization = 'DEFENCORE';
+  state.settings.author = 'Іваненко';
+  state.settings.checkedBy = 'Петренко';
+  state.settings.checkedDate = '04.11.26';
+  state.settings.inventoryNumber = 'INV-001';
   const project = parseProject(serializeProject(state));
   assert.deepEqual(project.parts, state.parts);
   assert.deepEqual(project.selected, ['part-1']);

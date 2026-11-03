@@ -11,23 +11,40 @@ The Open CASCADE WebAssembly kernel imports STEP geometry and computes precise h
 - Generate front, top, right and isometric views in a first-angle arrangement.
 - Suggest overall dimensions, visible full-circle diameters, hole-centre coordinates and verified orthogonal features. Coaxial shaft circles provide exact journal diameters and shoulder or groove stations.
 - Choose a balanced automatic dimension set or all recognized baseline coordinates; reposition the result to suit the part.
-- Add horizontal, vertical, aligned, diameter, radius and angle dimensions; move dimension lines, remove dimensions, and undo or redo changes.
+- Add horizontal, vertical, aligned, diameter, radius and angle dimensions with a preview before placement; drag labels or dimension lines, remove dimensions, and undo or redo changes.
 - Arrange smaller dimensions inside larger spans, with separate lanes for overlapping dimensions.
 - Set paper size A4, A3, A2 or A1, orientation, scale, decimal precision, hidden edges and centre lines.
-- Choose ESKD-inspired, ISO-style or minimal sheet templates and edit title-block fields and notes.
-- Export a vector PDF with one page per selected part.
-- Save and reopen an editable `.techdraw.json` project.
+- Choose GOST 2.104-68 Form 1 templates with English or Ukrainian frame labels, plus ISO-style or minimal sheets. The interface stays in English.
+- Edit title-block data, sign-off names, signatures, dates, change records, inventory fields and technical notes. Entries are saved in this browser and reused for subsequent parts and sessions; **Clear** resets the fields and their cache.
+- Inspect the sheet with cursor-anchored zoom from 25% to 1600%, panning and Fit.
+- Export a vector PDF with one page per selected part and the same layout as the preview.
+- Save and reopen an editable `.techdraw.json` project, including dimension positions and view layout.
 - Use light or dark interface themes. Drawing sheets remain white for printing.
 
-Automatic dimensions are geometric suggestions. The app does not import semantic STEP PMI or infer tolerances, fits, threads, surface finish, material, datum systems, sections or manufacturing process. Review and complete every drawing before manufacture. Template names describe layout styles, not certified standards compliance. See [engineering scope](docs/ENGINEERING.md).
+Automatic dimensions are geometric suggestions. The app does not import semantic STEP PMI or infer tolerances, fits, threads, surface finish, material, datum systems, sections or manufacturing process. Review and complete every drawing before manufacture. The Form 1 templates reproduce the specified frame geometry; they do not certify a complete drawing's compliance with every ESKD manufacturing requirement. See [engineering scope](docs/ENGINEERING.md).
 
 ## Use
 
 1. Choose **Import STEP** or **Try an example**.
 2. In the parts panel, open a part and check the parts to include in the drawing set.
-3. Set the sheet format and template. Complete the details and technical notes.
-4. Review automatic dimensions. Choose a dimension tool, then click a straight edge, circular edge, or snap points as appropriate. Drag a dimension label to reposition it.
-5. Export PDF. Use **Save project** to retain editable dimensions and sheet settings.
+3. Set the sheet format and template. Complete **Details** and technical notes. Saved title-block entries are reused automatically; choose **Clear** in the title-block editor when starting a new specification. GOST A4 sheets use portrait orientation.
+4. Review automatic dimensions. Choose a dimension tool, then pick a straight edge, circular edge, or snap points as appropriate. Move the draft preview and click to place it. Drag an existing dimension's label or line to reposition it.
+5. Export PDF. Use **Save project** to retain editable dimensions, sheet settings and view layout.
+
+| Control                                       | Action                                                        |
+| --------------------------------------------- | ------------------------------------------------------------- |
+| Mouse wheel                                   | Zoom around the cursor, from 25% to 1600% of the fitted sheet |
+| Space + drag, middle mouse drag, or hand tool | Pan the sheet                                                 |
+| Drag empty space with the selection tool      | Pan the sheet                                                 |
+| `0` or **Fit sheet**                          | Show the whole sheet and reset panning                        |
+| `+` / `-` or the zoom controls                | Zoom around the viewport centre                               |
+| `Esc`                                         | Cancel a draft or gesture and return to selection             |
+| `Delete` / `Backspace`                        | Remove the selected dimension                                 |
+| `Ctrl` / `⌘` + `Z`, with `Shift` to redo      | Undo or redo dimension and layout changes                     |
+
+Zoom changes the on-screen view only. **Drawing scale** controls the printed size. Adding, dragging, deleting or editing a dimension keeps the part views fixed; **Auto dimensions**, **Arrange**, or a change to paper format, orientation, template or drawing scale can lay out the sheet again. Undo restores both the previous dimensions and their view layout.
+
+The title-block cache contains document fields and the selected template. **Save project** retains part geometry, dimensions and drawing layouts; keep the original STEP files separately. Browser storage must be available for automatic reuse across reloads.
 
 All source units are normalized to millimetres by the CAD kernel. Curves are sampled for the displayed linework; dimension values come from model or analytic projected geometry rather than screen pixels. Display precision controls rounding and does not specify a manufacturing tolerance.
 
@@ -50,7 +67,7 @@ npm run preview
 
 The production output is `dist/`. Serve it over HTTP or HTTPS; opening `index.html` directly from the filesystem is not supported. The CAD kernel is loaded from the same static deployment, including its WebAssembly asset. No external CAD service is needed.
 
-Tests exercise real STEP geometry, inch-to-millimetre conversion, named nested assemblies, tangent-edge suppression, coincident-edge cleanup, source circle measurements, shafts, paper sizes, projection alignment, nested dimension lanes and sheet overflow. Browser review is still required for interaction and PDF rendering.
+Tests exercise real STEP geometry, inch-to-millimetre conversion, named nested assemblies, tangent-edge suppression, coincident-edge cleanup, source circle measurements, shafts, paper sizes, projection alignment, nested dimension lanes, sheet overflow, cursor-anchored zoom, geometry picking, annotation dragging and layout history. Browser review is still required for interaction and PDF rendering.
 
 See [architecture](docs/ARCHITECTURE.md) for module ownership and extension points, and [deployment](docs/DEPLOYMENT.md) for GitHub Pages and the custom domain.
 

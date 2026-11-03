@@ -14,11 +14,26 @@ Precise HLR output distinguishes hard edges and apparent outlines from smooth ta
 
 For a coaxial shaft, analytic source circles provide radii and axial stations. This avoids dimensioning incidental helical occlusion points. A circular arc supplies a radius; a complete source circle can supply a diameter. The drawing still needs a review of functional datums, groove widths and tolerances.
 
-## ESKD principles
+## GOST 2.104-68 frame templates
 
-The ESKD-inspired template provides a drawing frame, a right-hand title block, clear line weights, millimetre values, a stated scale, and a consistent projection arrangement. It is a drafting aid and is not a certification of conformity to every provision of a standard or a jurisdiction's current adoption.
+The English and Ukrainian ESKD templates use the requested GOST 2.104-68 Form 1 geometry. The reference is the standard's June 2002 reissue, including amendments 1–7 and its corrigendum: Form 1 is on PDF page 3 and placement diagrams are on page 7. [GOST 2.104-68, reproduced standard PDF](https://etp-perm.ru/images/images/2/326/gost_2.104_68.pdf).
 
-The standards relevant to a complete engineering review include the applicable editions and national adoptions of GOST 2.301 (formats), 2.302 (scales), 2.303 (lines), 2.304 (lettering), 2.305 (views and sections), 2.307 (dimensions and limit deviations), and 2.104 (title blocks). Check the contract and governing national standards before production. An A4 landscape sheet or a freely selected layout may be useful for documentation even where a strict ESKD deliverable requires a different arrangement.
+Verified reference dimensions, in millimetres:
+
+| Element                        | Geometry                                                         |
+| ------------------------------ | ---------------------------------------------------------------- |
+| Main title block               | 185 × 55; left, central and right sections 65 / 70 / 50          |
+| Document designation           | 120 × 15, above title and right-side fields                      |
+| Product title / material       | 70 × 25 / 70 × 15                                                |
+| Sign-off rows                  | Six 5 mm rows; role/name/signature/date widths 17 / 23 / 15 / 10 |
+| Litera / mass / scale          | Widths 15 / 17 / 18; litera has three 5 mm cells                 |
+| Inventory strip                | Label/value widths 5 / 7; five lengths 25 / 35 / 25 / 25 / 35    |
+| Repeated designation, field 26 | 70 × 14, rotated according to sheet arrangement                  |
+| Frame margins                  | 20 at the left; 5 at the other edges                             |
+
+Section 4 requires the A4 title block along the short edge, so GOST A4 templates use portrait orientation. Larger sheets support either orientation. Ukrainian labels are localized translations; the interface remains English. The document's litera denotes its development stage and is separate from its change/revision record. [GOST 2.104-68, sections 4 and 7 and Form 1](https://etp-perm.ru/images/images/2/326/gost_2.104_68.pdf).
+
+Frame geometry alone does not certify a complete manufacturing drawing. A complete review also considers the applicable editions and national adoptions of GOST 2.301 (formats), 2.302 (scales), 2.303 (lines), 2.304 (lettering), 2.305 (views and sections), and 2.307 (dimensions and limit deviations), together with the contract's requirements.
 
 For review:
 
@@ -42,3 +57,7 @@ Useful primary references:
 - [FreeCAD true and projected length dimensions](https://github.com/FreeCAD/FreeCAD-documentation/blob/main/wiki/TechDraw_LengthDimension.md)
 
 No FreeCAD source code or templates are copied merely by following these concepts. Dependencies retain their own licenses.
+
+## Open ESKD reference
+
+[Open ESKD](https://eskd.defencore.com) and its [source repository](https://github.com/defencore/open-eskd) were examined for local engineering workflows and Ukrainian terminology. Its [Ukrainian labels](https://github.com/defencore/open-eskd/blob/main/src/i18n/common-uk.js) informed terminology such as designation, material and revision. Its [report layout](https://github.com/defencore/open-eskd/blob/main/src/files/report/layout.js) produces an HTML engineering report, rather than a Form 1 CAD frame. TechDraw's frame dimensions come from the reproduced standard above. Open ESKD's [conformance specification](https://github.com/defencore/open-eskd/blob/main/docs/CONFORMANCE.md) defines that project's own data format and does not claim standards-body certification.

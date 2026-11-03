@@ -1,4 +1,6 @@
 const paths: Record<string, string> = {
+  minus: '<path d="M5 12h14"/>',
+  hand: '<path d="M8 12V5a2 2 0 0 1 4 0v6-8a2 2 0 0 1 4 0v8-5a2 2 0 0 1 4 0v9c0 4-3 7-7 7h-1c-3 0-4-2-5-4l-3-5a2 2 0 0 1 3-2l3 3"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   upload: '<path d="M12 16V4m-4 4 4-4 4 4M4 16v4h16v-4"/>',
   download: '<path d="M12 4v12m-4-4 4 4 4-4M4 17v3h16v-3"/>',

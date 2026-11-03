@@ -1,6 +1,8 @@
-import type { Dimension, DrawingSettings, Part } from './model';
+import type { Dimension, DrawingLayout, DrawingSettings, Part } from './model';
+import { titleBlockDefaults } from './drawing/title-block-data';
 
 export const defaultSettings: DrawingSettings = {
+  ...titleBlockDefaults,
   format: 'A3',
   orientation: 'landscape',
   template: 'eskd',
@@ -8,12 +10,6 @@ export const defaultSettings: DrawingSettings = {
   precision: 2,
   hiddenLines: false,
   centerLines: true,
-  title: '',
-  number: '',
-  material: '',
-  author: '',
-  revision: 'A',
-  tolerance: '',
   notes: 'Dimensions in mm.',
 };
 export interface WorkspaceState {
@@ -21,25 +17,36 @@ export interface WorkspaceState {
   selected: Set<string>;
   activeId: string | null;
   dimensions: Record<string, Dimension[]>;
+  layouts: Record<string, DrawingLayout>;
   settings: DrawingSettings;
 }
+export interface DimensionSnapshot {
+  dimensions: Dimension[];
+  layout?: DrawingLayout;
+}
+
+/** Dimensions and their sheet layout form one reversible editing operation. */
 export class DimensionHistory {
-  private past: Dimension[][] = [];
-  private future: Dimension[][] = [];
-  record(dimensions: Dimension[]): void {
-    this.past.push(structuredClone(dimensions));
+  private past: DimensionSnapshot[] = [];
+  private future: DimensionSnapshot[] = [];
+  record(snapshot: DimensionSnapshot): void {
+    this.past.push(structuredClone(snapshot));
     if (this.past.length > 60) this.past.shift();
     this.future = [];
   }
-  undo(current: Dimension[]): Dimension[] | undefined {
+  undo(current: DimensionSnapshot): DimensionSnapshot | undefined {
     const previous = this.past.pop();
     if (previous) this.future.push(structuredClone(current));
-    return previous;
+    return previous ? structuredClone(previous) : undefined;
   }
-  redo(current: Dimension[]): Dimension[] | undefined {
+  redo(current: DimensionSnapshot): DimensionSnapshot | undefined {
     const next = this.future.pop();
     if (next) this.past.push(structuredClone(current));
-    return next;
+    return next ? structuredClone(next) : undefined;
+  }
+  /** Paper changes invalidate stored view positions while annotation edits stay reversible. */
+  invalidateLayouts(): void {
+    for (const snapshot of [...this.past, ...this.future]) delete snapshot.layout;
   }
   get canUndo(): boolean {
     return this.past.length > 0;

@@ -1,12 +1,13 @@
 import { jsPDF } from 'jspdf';
 import 'svg2pdf.js';
-import type { Dimension, DrawingSettings, Part } from '../model';
+import type { Dimension, DrawingLayout, DrawingSettings, Part } from '../model';
 import { renderDrawing } from './render';
 
 export interface PdfPage {
   part: Part;
   dimensions: Dimension[];
   settings: DrawingSettings;
+  layout?: DrawingLayout;
 }
 
 let fontData: Promise<string> | undefined;
@@ -59,7 +60,13 @@ function applyPdfFont(pdf: jsPDF, svg: SVGSVGElement): void {
 /** Export the same sheet geometry shown in the workspace as vector PDF pages. */
 export async function exportPdf(pages: PdfPage[], filename = 'techdraw.pdf'): Promise<void> {
   if (!pages.length) throw new Error('Select at least one part to export.');
-  const rendered = pages.map((p) => renderDrawing(p.part, p.dimensions, p.settings));
+  const rendered = pages.map((p) =>
+    renderDrawing(p.part, p.dimensions, p.settings, undefined, p.layout),
+  );
+  if (rendered.some((p) => p.warnings.some((w) => w.startsWith('GOST 2.104-68 requires A4'))))
+    throw new Error(
+      'GOST 2.104-68 uses A4 portrait. Change orientation or choose another frame template.',
+    );
   if (rendered.some((p) => p.warnings.some((w) => w.includes('technical note lines do not fit'))))
     throw new Error(
       'Technical notes do not fit on the sheet. Shorten the notes or choose a wider sheet before exporting.',

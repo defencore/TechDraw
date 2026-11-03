@@ -7,7 +7,8 @@ import {
   arrangeDimensions,
   formatDimension,
 } from '../src/drawing/dimensions';
-import { paperSize, renderDrawing } from '../src/drawing/render';
+import { paperSize, renderDimension, renderDrawing } from '../src/drawing/render';
+import { defaultSettings } from '../src/state';
 
 function rectangle(id: Projection['id'], width: number, height: number): Projection {
   const points: Point2[] = [
@@ -45,6 +46,7 @@ const part: Part = {
   ],
 };
 const settings: DrawingSettings = {
+  ...defaultSettings,
   format: 'A3',
   orientation: 'landscape',
   template: 'eskd',
@@ -158,7 +160,7 @@ test('all ISO paper sizes and orientations are exact and preserve four views', (
     ['A1', 594, 841],
   ] as const) {
     for (const orientation of ['portrait', 'landscape'] as const) {
-      const options = { ...settings, format, orientation };
+      const options = { ...settings, format, orientation, template: 'iso' as const };
       const rendered = renderDrawing(part, autoDimensions(part), options);
       assert.deepEqual(
         paperSize(options),
@@ -174,7 +176,7 @@ test('all ISO paper sizes and orientations are exact and preserve four views', (
             const x = transform.x + point[0] * transform.scale;
             const y = transform.y - point[1] * transform.scale;
             assert.ok(
-              x >= 21 && x <= rendered.width - 6,
+              x >= 11 && x <= rendered.width - 6,
               `${format} ${orientation}: x geometry out of frame`,
             );
             assert.ok(
@@ -357,6 +359,7 @@ test('dimensions from different datums still use absolute ordered exterior lanes
 test('title block text fits cells and preserves separate technical note lines', () => {
   const rendered = renderDrawing(part, autoDimensions(part), {
     ...settings,
+    template: 'iso',
     title: 'W'.repeat(200),
     number: 'W'.repeat(200),
     material: 'W'.repeat(200),
@@ -383,6 +386,7 @@ test('title block text fits cells and preserves separate technical note lines', 
 test('technical notes disclose omitted lines rather than silently dropping requirements', () => {
   const rendered = renderDrawing(part, autoDimensions(part), {
     ...settings,
+    template: 'iso',
     notes: Array.from({ length: 12 }, (_, index) => `Requirement ${index + 1}`).join('\n'),
   });
   assert.ok(
@@ -585,5 +589,117 @@ test('dimension labels and arrowheads use PDF-portable filled geometry', () => {
     assert.match(group[1], /^<rect[^>]*fill="white"[^>]*stroke="none"/);
     assert.match(group[1], /<text[^>]*fill="#20262b"[^>]*stroke="none"/);
     assert.ok(group[1].indexOf('<rect') < group[1].indexOf('<text'));
+  }
+});
+
+test('cached layouts allow annotation placement across view cells without moving geometry', () => {
+  const originalDimensions = [linear('move', 0, 30)];
+  const original = renderDrawing(part, originalDimensions, settings);
+  const moved = [{ ...originalDimensions[0], offset: 90 }];
+  const edited = renderDrawing(part, moved, settings, undefined, original);
+  assert.equal(edited.scale, original.scale);
+  assert.deepEqual(edited.viewTransforms, original.viewTransforms);
+  assert.ok(
+    !edited.warnings.some(
+      (warning) =>
+        warning.startsWith('Dimensions exceed') || warning.startsWith('The selected scale'),
+    ),
+    'valid placement is checked against the whole content frame, not its initial view cell',
+  );
+  const originalPaths = [...original.svg.matchAll(/<path[^>]*data-edge-id="[^"]+"[^>]*>/g)].map(
+    (match) => match[0],
+  );
+  const editedPaths = [...edited.svg.matchAll(/<path[^>]*data-edge-id="[^"]+"[^>]*>/g)].map(
+    (match) => match[0],
+  );
+  assert.deepEqual(editedPaths, originalPaths);
+});
+
+test('cached layouts report actual off-frame annotation or translated geometry without refitting', () => {
+  const dimensions = [linear('move', 0, 30)];
+  const original = renderDrawing(part, dimensions, settings);
+  const offFrame = renderDrawing(
+    part,
+    [{ ...dimensions[0], offset: 500 }],
+    settings,
+    undefined,
+    original,
+  );
+  assert.ok(offFrame.warnings.some((warning) => warning.startsWith('Dimensions exceed')));
+  assert.equal(offFrame.scale, original.scale);
+  assert.deepEqual(offFrame.viewTransforms, original.viewTransforms);
+  const shifted = structuredClone(original);
+  shifted.viewTransforms.front.x += 500;
+  const translated = renderDrawing(part, dimensions, settings, undefined, shifted);
+  assert.ok(
+    translated.warnings.some((warning) => warning.startsWith('Dimensions exceed')),
+    'small occupied bounds still overflow when their frozen translation moves them off-sheet',
+  );
+  assert.deepEqual(translated.viewTransforms, shifted.viewTransforms);
+});
+
+function extensionSegments(markup: string): number[][] {
+  return [...markup.matchAll(/<line[^>]*\/>/g)]
+    .map((match) => match[0])
+    .filter((line) => !line.includes('data-dimension-grip'))
+    .map((line) =>
+      ['x1', 'y1', 'x2', 'y2'].map((key) => Number(line.match(new RegExp(`${key}="([^"]+)"`))![1])),
+    );
+}
+
+test('horizontal extension gaps and overshoots face the dimension line above or below the part', () => {
+  const dimension = linear('extension', 0, 30);
+  const t = { x: 0, y: 50, scale: 1 };
+  assert.deepEqual(extensionSegments(renderDimension(dimension, t, 2, false)), [
+    [0, 51, 0, 62],
+    [30, 51, 30, 62],
+  ]);
+  assert.deepEqual(extensionSegments(renderDimension({ ...dimension, offset: -10 }, t, 2, false)), [
+    [0, 49, 0, 38],
+    [30, 49, 30, 38],
+  ]);
+});
+
+test('vertical extension gaps and overshoots face left or right without crossing the source anchor', () => {
+  const dimension: Dimension = {
+    ...linear('extension', 0, 30),
+    kind: 'vertical',
+    a: [0, 0],
+    b: [0, 30],
+  };
+  const t = { x: 0, y: 50, scale: 1 };
+  assert.deepEqual(extensionSegments(renderDimension(dimension, t, 2, false)), [
+    [-1, 50, -12, 50],
+    [-1, 20, -12, 20],
+  ]);
+  assert.deepEqual(extensionSegments(renderDimension({ ...dimension, offset: -10 }, t, 2, false)), [
+    [1, 50, 12, 50],
+    [1, 20, 12, 20],
+  ]);
+});
+
+test('aligned extensions use a one-millimetre anchor gap and two-millimetre normal overshoot on both sides', () => {
+  const dimension: Dimension = {
+    ...linear('extension', 0, 5),
+    kind: 'aligned',
+    a: [0, 0],
+    b: [3, 4],
+  };
+  const t = { x: 0, y: 50, scale: 1 };
+  assert.deepEqual(extensionSegments(renderDimension(dimension, t, 2, false)), [
+    [0.8, 50.6, 9.6, 57.2],
+    [3.8, 46.6, 12.6, 53.2],
+  ]);
+  assert.deepEqual(extensionSegments(renderDimension({ ...dimension, offset: -10 }, t, 2, false)), [
+    [-0.8, 49.4, -9.6, 42.8],
+    [2.2, 45.4, -6.6, 38.8],
+  ]);
+  for (const kind of ['horizontal', 'vertical', 'aligned'] as const) {
+    const near = { ...dimension, kind, offset: 0.5 };
+    assert.equal(
+      extensionSegments(renderDimension(near, t, 2, false)).length,
+      kind === 'aligned' ? 0 : 1,
+      'extensions shorter than the anchor gap are omitted per source point',
+    );
   }
 });
