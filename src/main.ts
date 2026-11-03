@@ -53,6 +53,9 @@ const cad = createCadClient((message: string) => {
   progress = message;
   updateProgress();
 });
+const canvasResizeObserver = new ResizeObserver(() => {
+  if (!drag) renderPaper();
+});
 const active = () => state.parts.find((p) => p.id === state.activeId);
 const dims = () => (state.activeId ? (state.dimensions[state.activeId] ?? []) : []);
 const history = () => {
@@ -117,6 +120,9 @@ function render(): void {
     <div id="toast" class="toast ${notification ? 'visible' : ''}" role="status" aria-live="polite">${e(notification)}</div>
     ${helpOpen ? views.renderHelp() : ''}`;
   renderPaper();
+  canvasResizeObserver.disconnect();
+  const canvas = document.querySelector('#canvas-area');
+  if (canvas) canvasResizeObserver.observe(canvas);
 }
 
 function toolHint(): string {
@@ -147,6 +153,19 @@ function renderPaper(): void {
   host.className = 'paper-host';
   host.style.setProperty('--zoom', String(zoom));
   host.style.setProperty('--paper-ratio', String(rendered.width / rendered.height));
+  const canvas = document.querySelector<HTMLElement>('#canvas-area');
+  if (canvas) {
+    const style = getComputedStyle(canvas);
+    const availableWidth =
+      canvas.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+    const availableHeight =
+      canvas.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+    const fitWidth = Math.max(
+      80,
+      Math.min(availableWidth, (availableHeight * rendered.width) / rendered.height),
+    );
+    host.style.width = `${fitWidth * zoom}px`;
+  }
   const svg = host.querySelector('svg');
   if (svg) {
     svg.setAttribute('aria-label', `Technical drawing of ${part.name}`);
