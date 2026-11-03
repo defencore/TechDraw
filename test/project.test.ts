@@ -1,0 +1,212 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import type { Part, Projection } from '../src/model';
+import { parseProject, serializeProject } from '../src/project';
+import { defaultSettings, type WorkspaceState } from '../src/state';
+
+function workspace(): WorkspaceState {
+  const views: Projection[] = (['front', 'top', 'right', 'iso'] as const).map((id) => ({
+    id,
+    name: id,
+    bounds: { minX: 0, minY: 0, maxX: 20.123456789, maxY: 10 },
+    edges: [
+      {
+        id: 'edge',
+        kind: 'line',
+        hidden: false,
+        points: [
+          [0, 0],
+          [20.123456789, 10],
+        ],
+      },
+    ],
+    anchors: [{ id: 'origin', point: [0, 0], source: [0, 0, 0] }],
+  }));
+  const part: Part = {
+    id: 'part-1',
+    name: 'Plate',
+    sourceName: 'assembly.step',
+    path: ['Assembly', 'Plate'],
+    unit: 'mm',
+    bounds: { min: [0, 0, 0], max: [20.123456789, 10, 3] },
+    views,
+    warnings: [],
+    features: {
+      circles: [
+        { id: 'bore', center: [5, 5, 3], normal: [0, 0, 1], radius: 2.123456789, closed: true },
+      ],
+    },
+  };
+  return {
+    parts: [part],
+    activeId: part.id,
+    selected: new Set([part.id]),
+    settings: { ...defaultSettings },
+    dimensions: {
+      [part.id]: [
+        {
+          id: 'width',
+          viewId: 'front',
+          kind: 'horizontal',
+          a: [0, 0],
+          b: [20.123456789, 0],
+          value: 20.123456789,
+          offset: 10,
+          automatic: true,
+        },
+      ],
+    },
+  };
+}
+const source = () => JSON.parse(serializeProject(workspace()));
+
+test('editable project roundtrip preserves precision, selection, annotations and settings', () => {
+  const state = workspace();
+  state.dimensions['part-1'][0].suffix = ' ±0.05';
+  state.dimensions['part-1'][0].textOffset = [3.25, -2];
+  state.settings.notes = 'Deburr all edges.\nDo not scale the drawing.';
+  const project = parseProject(serializeProject(state));
+  assert.deepEqual(project.parts, state.parts);
+  assert.deepEqual(project.selected, ['part-1']);
+  assert.deepEqual(project.dimensions['part-1'], state.dimensions['part-1']);
+  assert.equal(project.dimensions['part-1'][0].value, 20.123456789);
+  assert.deepEqual(project.settings, state.settings);
+});
+
+test('malformed geometry cannot reach projection or dimension rendering', () => {
+  const mutations = [
+    (p: any) => {
+      delete p.parts[0].views[0].bounds.maxX;
+    },
+    (p: any) => {
+      p.parts[0].views[0].bounds.minX = 100;
+    },
+    (p: any) => {
+      p.parts[0].views[0].edges[0].points[0] = [0, 0, 1];
+    },
+    (p: any) => {
+      p.parts[0].views[0].edges[0].points[0] = [Infinity, 0];
+    },
+    (p: any) => {
+      p.parts[0].views[0].edges[0].points[0] = [-100, 0];
+    },
+    (p: any) => {
+      p.parts[0].views[1].id = 'front';
+    },
+    (p: any) => {
+      p.parts[0].unit = 'inch';
+    },
+    (p: any) => {
+      p.parts[0].views[0].anchors[0].source = [0, 0];
+    },
+    (p: any) => {
+      p.dimensions['part-1'][0].viewId = 'iso';
+    },
+    (p: any) => {
+      p.dimensions['part-1'][0].value = '<script>';
+    },
+    (p: any) => {
+      p.dimensions['part-1'][0].value = 99;
+    },
+    (p: any) => {
+      p.parts[0].features.circles[0].normal = [0, 0, 2];
+    },
+    (p: any) => {
+      p.parts[0].features.circles[0].radius = -1;
+    },
+  ];
+  for (const mutate of mutations) {
+    const project = source();
+    mutate(project);
+    assert.throws(() => parseProject(JSON.stringify(project)), /Invalid project/);
+  }
+});
+
+test('project data cannot substitute strings for boolean settings or flags', () => {
+  for (const mutate of [
+    (p: any) => {
+      p.settings.hiddenLines = 'false';
+    },
+    (p: any) => {
+      delete p.settings.centerLines;
+    },
+    (p: any) => {
+      p.parts[0].views[0].edges[0].hidden = 0;
+    },
+    (p: any) => {
+      p.dimensions['part-1'][0].automatic = 'true';
+    },
+  ]) {
+    const project = source();
+    mutate(project);
+    assert.throws(() => parseProject(JSON.stringify(project)), /must be true or false/);
+  }
+});
+
+test('prototype-like IDs and orphan dimensions or selections are rejected', () => {
+  for (const mutate of [
+    (p: any) => {
+      p.parts[0].id = '__proto__';
+    },
+    (p: any) => {
+      p.dimensions.orphan = [];
+    },
+    (p: any) => {
+      p.selected = ['unknown'];
+    },
+    (p: any) => {
+      p.selected = ['part-1', 'part-1'];
+    },
+    (p: any) => {
+      p.dimensions['part-1'].push(p.dimensions['part-1'][0]);
+    },
+  ]) {
+    const project = source();
+    mutate(project);
+    assert.throws(() => parseProject(JSON.stringify(project)), /Invalid project/);
+  }
+  assert.equal(({} as Record<string, unknown>).polluted, undefined);
+});
+
+test('untrusted names remain plain text and extra object properties are discarded', () => {
+  const project = source();
+  project.parts[0].name = '<img src=x onerror="alert(1)">';
+  project.parts[0].views[0].onload = 'alert(1)';
+  project.parts[0].views[0].edges[0].style = 'url(javascript:alert(1))';
+  Object.defineProperty(project.parts[0], '__proto__', {
+    value: { polluted: true },
+    enumerable: true,
+  });
+  const parsed = parseProject(JSON.stringify(project));
+  assert.equal(parsed.parts[0].name, project.parts[0].name);
+  assert.equal(Object.hasOwn(parsed.parts[0], '__proto__'), false);
+  assert.equal(Object.hasOwn(parsed.parts[0].views[0], 'onload'), false);
+  assert.equal(Object.hasOwn(parsed.parts[0].views[0].edges[0], 'style'), false);
+  assert.equal(({} as Record<string, unknown>).polluted, undefined);
+});
+
+test('resource limits reject oversized arrays before rendering', () => {
+  const project = source();
+  project.parts[0].views[0].edges[0].points = Array.from({ length: 10001 }, () => [0, 0]);
+  assert.throws(() => parseProject(JSON.stringify(project)), /supported limit/);
+});
+
+test('angle values must agree with a finite pair of rays and an explicit vertex', () => {
+  const project = source();
+  project.dimensions['part-1'] = [
+    {
+      id: 'angle',
+      viewId: 'front',
+      kind: 'angle',
+      a: [10, 0],
+      b: [0, 10],
+      vertex: [0, 0],
+      value: 90,
+      offset: 14,
+      automatic: false,
+    },
+  ];
+  assert.equal(parseProject(JSON.stringify(project)).dimensions['part-1'][0].value, 90);
+  delete project.dimensions['part-1'][0].vertex;
+  assert.throws(() => parseProject(JSON.stringify(project)), /require a vertex/);
+});
