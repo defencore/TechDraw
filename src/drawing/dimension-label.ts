@@ -76,7 +76,7 @@ function inline(text: string): DimensionLabel {
 
 /** Coordinates use the complete label's horizontal center and nominal baseline as origin. */
 export function formatDimensionLabel(dimension: Dimension, precision: number): DimensionLabel {
-  const main = nominal(dimension, precision),
+  const main = nominal(dimension, Math.max(precision, dimension.minimumPrecision ?? 0)),
     suffix = dimension.suffix ?? '';
   const tolerance = dimension.tolerance;
   const angularUnit = dimension.kind === 'angle' ? '°' : '';

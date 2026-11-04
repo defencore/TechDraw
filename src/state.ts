@@ -1,4 +1,11 @@
-import type { Dimension, DrawingAnnotation, DrawingLayout, DrawingSettings, Part } from './model';
+import type {
+  Dimension,
+  DrawingAnnotation,
+  DrawingLayout,
+  DrawingSettings,
+  GearSpecification,
+  Part,
+} from './model';
 import { titleBlockDefaults } from './drawing/title-block-data';
 
 export const defaultSettings: DrawingSettings = {
@@ -28,6 +35,7 @@ export interface DimensionSnapshot {
   annotations?: DrawingAnnotation[];
   layout?: DrawingLayout;
   instructions?: string;
+  gearSpecification?: GearSpecification | null;
 }
 
 /** Dimensions, review annotations and sheet layout form one reversible editing operation. */

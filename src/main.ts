@@ -3,6 +3,7 @@ import './ui/workspace-cad.css';
 import './ui/drawing-share.css';
 import './ui/viewer.css';
 import './ui/text-annotation-editor.css';
+import './ui/gear-editor.css';
 import { createCadClient } from './cad/client';
 import { refreshDimensionSuggestions } from './drawing/suggestions';
 import { renderDrawingFeedback } from './ui/drawing-feedback';
@@ -43,6 +44,7 @@ import { errorMessage } from './ui/error-message';
 import { icon } from './ui/icons';
 import { button, option, renderLockBadge } from './ui/components';
 import { createWorkspaceViews } from './ui/views';
+import { partDisplayLabel } from './ui/part-label';
 import { downloadBlob, escapeHtml as e, readPreference, savePreference } from './ui/utils';
 import {
   readLanguage,
@@ -60,6 +62,14 @@ import { renderMarkupGuide } from './ui/markup-guide';
 import { DEFAULT_ANNOTATION_COLOR } from './drawing/annotation-style';
 import { GRID_PRESETS } from './ui/grid-spacing-editor';
 import { renderManufacturingInstructions } from './ui/manufacturing-instructions';
+import {
+  renderGearEditor,
+  captureGearEditor,
+  parseGearEditorDraft,
+  handleGearEditorClick,
+  syncGearEditorType,
+  type GearEditorDraft,
+} from './ui/gear-editor';
 import type { DrawingAppearance } from './drawing/appearance';
 import type { DrawingAnnotation } from './model';
 import {
@@ -131,6 +141,7 @@ const annotationOptions = {
   color: DEFAULT_ANNOTATION_COLOR,
 };
 const instructionDrafts = new Map<string, string>();
+const gearDrafts = new Map<string, GearEditorDraft>();
 const dimensionFilter = { ...defaultDimensionFilter };
 const cad = createCadClient((message: string) => {
   progress = message;
@@ -503,6 +514,7 @@ function refreshInspector(): void {
     collapsedBranches,
     annotationPanel: renderMarkupPanel(),
     instructionsPanel: renderInstructionsPanel(),
+    gearPanel: renderGearPanel(),
     hasLockedItems: hasLockedItems(),
   });
   const body = app.querySelector('.inspector-body');
@@ -560,6 +572,36 @@ function renderInstructionsPanel(): string {
     dirty: draft !== committed,
     locked: Boolean(state.activeId && partHasLocks(state.activeId)),
   });
+}
+function renderGearPanel(): string {
+  const part = active();
+  return part
+    ? renderGearEditor(part, gearDrafts.get(part.id), !busy)
+    : '<p class="field-help">Import a part to configure gear data.</p>';
+}
+function flushGearDrafts(): void {
+  const pending = [...gearDrafts]
+    .filter(([id]) => state.parts.some((part) => part.id === id))
+    .map(([id, draft]) => [id, parseGearEditorDraft(draft)] as const);
+  flushInstructionDrafts();
+  let changed = false;
+  for (const [id, specification] of pending) {
+    changed = workspaceDocument.setGearSpecification(id, specification) || changed;
+    gearDrafts.delete(id);
+  }
+  if (changed) render();
+}
+function applyGearDraft(): void {
+  if (!state.activeId || busy) return;
+  try {
+    const specification = parseGearEditorDraft(captureGearEditor(app));
+    workspaceDocument.setGearSpecification(state.activeId, specification);
+    gearDrafts.delete(state.activeId);
+    render();
+    toast('Gear data applied to this part.');
+  } catch (error) {
+    toast(errorMessage(error));
+  }
 }
 function flushInstructionDrafts(): void {
   const pending = [...instructionDrafts]
@@ -701,6 +743,7 @@ function render(): void {
     collapsedBranches,
     annotationPanel: renderMarkupPanel(),
     instructionsPanel: renderInstructionsPanel(),
+    gearPanel: renderGearPanel(),
     hasLockedItems: hasLockedItems(),
   });
   app.innerHTML = `
@@ -723,14 +766,14 @@ function render(): void {
       </aside>
       <main class="drawing-workspace">
         ${focusMode ? `<div class="focus-mode-banner" role="status"><span>Focus mode is on</span>${button('toggle-focus-mode', 'Show panels', 'panels', 'text-button')}</div>` : ''}
-        <div class="workspace-heading"><div><div class="eyebrow">DRAWING WORKSPACE</div><h1 ${part ? 'data-user-content' : ''}>${part ? e(part.name) : 'From solid to sheet'}</h1></div><div class="export-group">${button('view-drawing', 'View', 'expand', 'secondary compact', !part || busy ? 'disabled' : '')}${button('share-drawing', 'Copy image', 'copy', 'secondary compact', !part || busy ? 'disabled' : '')}${button('export-options', `Export${state.selected.size > 1 ? ` · ${state.selected.size}` : ''}`, 'download', 'primary', !state.selected.size || busy ? 'disabled' : '')}</div></div>
+        <div class="workspace-heading"><div><div class="eyebrow">DRAWING WORKSPACE</div><h1 ${part ? `data-user-content title="${e(part.name)}"` : ''}>${part ? e(partDisplayLabel(part.name)) : 'From solid to sheet'}</h1></div><div class="export-group">${button('view-drawing', 'View', 'expand', 'secondary compact', !part || busy ? 'disabled' : '')}${button('share-drawing', 'Copy image', 'copy', 'secondary compact', !part || busy ? 'disabled' : '')}${button('export-options', `Export${state.selected.size > 1 ? ` · ${state.selected.size}` : ''}`, 'download', 'primary', !state.selected.size || busy ? 'disabled' : '')}</div></div>
         <div id="workspace-feedback" role="status" aria-live="polite" hidden></div>
         <div class="canvas-shell"><div id="selection-actions" class="selection-actions" role="toolbar" aria-label="Selected dimension actions" hidden></div>${renderWorkspaceControls({ tool, mode: workspaceMode, enabled: Boolean(part) && !busy, canUndo: Boolean(workspaceDocument.history?.canUndo), canRedo: Boolean(workspaceDocument.history?.canRedo), zoomOptions: zoomOptions(), grid, customGrid })}
         <div class="canvas-area ${dimensionTools.some((item) => item.id === tool) ? 'measuring' : ''}" id="canvas-area" tabindex="0" aria-label="Drawing canvas. Wheel to zoom, drag empty space to pan."><div class="drop-overlay">${icon('upload')}Drop STEP files to import</div><div id="paper-host"></div>${!part ? views.renderEmpty() : ''}</div>
         </div><div class="canvas-status"><span id="tool-hint">${e(canvasHint)}</span><span>${part ? `${state.settings.format} · ${state.settings.orientation} · mm` : 'STEP / STP / DXF · Multiple files supported'}</span></div>
       </main>
       <aside class="inspector" aria-label="Drawing properties">
-        <div class="inspector-tabs" role="tablist">${['dimensions', 'annotations', 'instructions', 'sheet', 'details'].map((tab) => `<button role="tab" aria-selected="${inspectorTab === tab}" data-action="tab:${tab}" class="${inspectorTab === tab ? 'active' : ''}">${tab === 'details' ? 'Title block' : tab === 'annotations' ? 'Markup' : tab[0].toUpperCase() + tab.slice(1)}</button>`).join('')}</div>
+        <div class="inspector-tabs" role="tablist">${['dimensions', 'annotations', 'instructions', 'gear', 'sheet', 'details'].map((tab) => `<button role="tab" aria-selected="${inspectorTab === tab}" data-action="tab:${tab}" class="${inspectorTab === tab ? 'active' : ''}">${tab === 'details' ? 'Title block' : tab === 'annotations' ? 'Markup' : tab[0].toUpperCase() + tab.slice(1)}</button>`).join('')}</div>
         <div class="inspector-body">${views.renderInspector()}</div>
         <div class="review-note">${icon('info')}<p><strong>Review before manufacture</strong>Automatic dimensions are a starting point. Confirm features, tolerances, fits and sections.</p></div>
       </aside>
@@ -1007,6 +1050,12 @@ app.addEventListener('focusout', (event) => {
   }
   if (control.dataset.dimensionSetting) dimensionInputSession = undefined;
 });
+app.addEventListener('submit', (event) => {
+  if ((event.target as HTMLElement).id === 'gear-editor-form') {
+    event.preventDefault();
+    applyGearDraft();
+  }
+});
 app.addEventListener('input', (event) => {
   const control = event.target as HTMLInputElement | HTMLTextAreaElement;
   if (control.id === 'dimension-search') {
@@ -1241,6 +1290,7 @@ async function openProject(file: File): Promise<void> {
     const data = archive?.project ?? parseProject(await file.text());
     if (token !== importToken) return;
     instructionDrafts.clear();
+    gearDrafts.clear();
     toleranceEditor.reset();
     const savedOrientation = data.settings.orientation;
     workspaceDocument.replace(data);
@@ -1397,6 +1447,7 @@ function deleteDimensions(ids: ReadonlySet<string>): void {
 function travelHistory(direction: 'undo' | 'redo'): void {
   drawingCanvas.cancel();
   if (workspaceDocument.travel(direction)) {
+    if (state.activeId) gearDrafts.delete(state.activeId);
     dimensionSelection.retain(dims().map((dimension) => dimension.id));
     if (!annotations().some((item) => item.id === selectedAnnotation))
       selectedAnnotation = undefined;
@@ -1576,6 +1627,7 @@ const commandHandlers: Record<CommandId, () => void> = {
   'tab:details': () => openInspector('details'),
   'tab:dimensions': () => openInspector('dimensions'),
   'tab:instructions': () => openInspector('instructions'),
+  'tab:gear': () => openInspector('gear'),
   'tab:annotations': () => openInspector('annotations'),
   theme: () => {
     theme = theme === 'light' ? 'dark' : 'light';
@@ -1659,7 +1711,7 @@ function runWorkspaceAction(action: string): void {
     ].includes(command.id)
   ) {
     try {
-      flushInstructionDrafts();
+      flushGearDrafts();
     } catch (error) {
       toast(errorMessage(error));
       return;
@@ -1670,6 +1722,21 @@ function runWorkspaceAction(action: string): void {
 
 app.addEventListener('click', (event) => {
   const target = event.target as Element;
+  if (handleGearEditorClick(app, target)) return;
+  const gearAction = target.closest<HTMLElement>('[data-gear-action]')?.dataset.gearAction;
+  if (gearAction) {
+    event.preventDefault();
+    if (gearAction === 'apply') applyGearDraft();
+    else if (state.activeId) {
+      gearDrafts.delete(state.activeId);
+      if (gearAction === 'remove') {
+        workspaceDocument.setGearSpecification(state.activeId);
+        render();
+        toast('Gear data removed. Measured geometry remains available.');
+      } else refreshInspector();
+    }
+    return;
+  }
   syncSettingsFromControls();
   const instructionAction = target.closest<HTMLElement>('[data-instructions-action]')?.dataset
     .instructionsAction;
@@ -1781,6 +1848,7 @@ app.addEventListener('click', (event) => {
     }
     toleranceEditor.clearPart(removeId);
     instructionDrafts.delete(removeId);
+    gearDrafts.delete(removeId);
     drawingCanvas.cancel();
     workspaceDocument.removePart(removeId);
     dimensionSelection.clear();
@@ -1813,6 +1881,11 @@ app.addEventListener('click', (event) => {
 
 app.addEventListener('change', (event) => {
   const target = event.target as HTMLInputElement;
+  if (target.dataset.gearField && state.activeId) {
+    gearDrafts.set(state.activeId, captureGearEditor(app));
+    if (target.dataset.gearField === 'type') syncGearEditorType(app);
+    return;
+  }
   if (target.id === 'dxf-unit') {
     dxfUnit = target.value === 'file' ? undefined : (target.value as DxfUnit);
     return;
@@ -2077,6 +2150,10 @@ window.addEventListener('pageshow', () => {
 });
 app.addEventListener('input', (event) => {
   const input = event.target as HTMLInputElement;
+  if (input.dataset.gearField && state.activeId) {
+    gearDrafts.set(state.activeId, captureGearEditor(app));
+    return;
+  }
   if (input.id === 'manufacturing-instructions' && state.activeId) {
     instructionDrafts.set(state.activeId, input.value);
     const dirty = input.value !== instructions();

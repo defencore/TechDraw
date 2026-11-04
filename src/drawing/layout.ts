@@ -2,7 +2,7 @@ import type { Dimension, DrawingLayout, DrawingSettings, Part } from '../model';
 import { arrangeDimensions } from './dimensions';
 import {
   calculateDrawingLayout,
-  STANDARD_DRAWING_SCALES,
+  automaticDrawingScales,
   type CalculatedDrawingLayout,
 } from './page-layout';
 
@@ -34,14 +34,15 @@ export function initializeDrawing(
 
   // Evaluate each standard scale with its own paper-space annotation packing.
   // SVG serialization happens only after a physical layout has been selected.
-  for (const scale of STANDARD_DRAWING_SCALES) {
+  const candidates = automaticDrawingScales(part);
+  for (const scale of candidates) {
     const arranged = arrange(scale);
     const sheet = calculateDrawingLayout(part, arranged, { ...settings, scale });
     if (sheet.fits) return initialized(arranged, sheet);
   }
 
   // Preserve a valid standard scale and let the renderer report that a larger sheet is needed.
-  const smallestScale = STANDARD_DRAWING_SCALES.at(-1)!;
+  const smallestScale = candidates.at(-1)!;
   const arranged = arrange(smallestScale);
   return initialized(
     arranged,

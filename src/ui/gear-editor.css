@@ -1,0 +1,222 @@
+.gear-editor {
+  display: grid;
+  gap: 15px;
+}
+.gear-editor-heading,
+.gear-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.gear-editor-heading h2 {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.5;
+}
+.gear-source-badge {
+  flex-shrink: 0;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--muted);
+  background: var(--surface-subtle);
+  font-size: 9px;
+  font-weight: 550;
+}
+.gear-measured {
+  padding: 11px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-subtle);
+}
+.gear-section-heading strong {
+  font-size: 11px;
+}
+.gear-measured dl {
+  display: grid;
+  gap: 7px;
+  margin: 12px 0 0;
+  font-size: 10px;
+}
+.gear-measured dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+.gear-measured dt {
+  color: var(--muted);
+}
+.gear-measured dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+.gear-measured p,
+.gear-source-hints p {
+  margin: 11px 0 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.6;
+}
+.gear-source-hints,
+.gear-details {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.gear-source-hints {
+  padding: 0 11px 11px;
+}
+.gear-source-hints summary,
+.gear-details summary {
+  padding: 11px;
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.gear-source-hints summary {
+  margin: 0 -11px -11px;
+}
+.gear-source-hints[open] summary {
+  margin-bottom: 0;
+}
+.gear-fields,
+.gear-helical-fields {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.gear-fields > .field-row {
+  gap: 10px;
+}
+.gear-fields input,
+.gear-fields textarea,
+.gear-fields select {
+  min-height: 38px;
+}
+.gear-helical-fields {
+  margin: 13px 0;
+  padding: 11px 10px 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.gear-helical-fields legend {
+  padding: 0 5px;
+  color: var(--muted);
+  font-size: 10px;
+}
+.gear-helical-fields:disabled {
+  opacity: 0.5;
+}
+.gear-details {
+  margin: 13px 0;
+}
+.gear-details > .field,
+.gear-details > .field-help,
+.gear-details > .gear-symbols {
+  margin-left: 11px;
+  margin-right: 11px;
+}
+.gear-details > .field-help {
+  margin-bottom: 12px;
+}
+.gear-symbols {
+  display: flex;
+  gap: 5px;
+  margin-top: -10px;
+  margin-bottom: 14px;
+}
+.gear-symbols button {
+  width: 38px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-subtle);
+  color: var(--ink);
+  font-size: 15px;
+}
+.gear-data-status {
+  margin: 13px 0;
+  padding: 10px 11px;
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--border));
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10px;
+  line-height: 1.7;
+}
+.gear-data-status strong {
+  font-size: 11px;
+  font-weight: 600;
+}
+.gear-data-status p {
+  margin: 5px 0 0;
+}
+.gear-reference {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 10px;
+  color: var(--muted);
+}
+.gear-reference strong {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.gear-editor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 15px 0;
+}
+.gear-editor-actions button {
+  min-height: 38px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-subtle);
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 550;
+}
+.gear-editor-actions [data-gear-action='apply'] {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--surface);
+}
+.gear-editor-actions [data-gear-action='remove'] {
+  color: #b34c55;
+}
+:root[data-theme='dark'] .gear-editor-actions [data-gear-action='remove'] {
+  color: #f3a0aa;
+}
+.gear-fields:disabled button,
+.gear-fields:disabled input,
+.gear-fields:disabled select,
+.gear-fields:disabled textarea {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.inspector-tabs:has([data-action='tab:gear']) button:nth-child(n + 4) {
+  grid-column: span 2;
+}
+@media (pointer: coarse) {
+  .gear-fields input,
+  .gear-fields textarea,
+  .gear-fields select,
+  .gear-symbols button,
+  .gear-editor-actions button {
+    min-height: 44px;
+  }
+  .gear-fields input,
+  .gear-fields textarea,
+  .gear-fields select {
+    font-size: 16px;
+  }
+  .gear-symbols button {
+    min-width: 44px;
+  }
+}

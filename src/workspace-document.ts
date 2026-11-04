@@ -1,4 +1,5 @@
-import type { Dimension, DrawingAnnotation, DrawingLayout, Part } from './model';
+import type { Dimension, DrawingAnnotation, DrawingLayout, GearSpecification, Part } from './model';
+import { parseGearSpecification } from './gears/specification';
 import { autoDimensions } from './drawing/dimensions';
 import { initializeDrawing } from './drawing/layout';
 import { parsePartInstructions, type ProjectData } from './project';
@@ -63,6 +64,15 @@ export class WorkspaceDocument {
     const { format, orientation, template, scale } = this.state.settings;
     return JSON.stringify([format, orientation, template, scale]);
   }
+  private arrangeGeneratedGear(part: Part): void {
+    if (
+      (part.features?.gear || part.gearSpecification) &&
+      !this.partHasLocks(part.id) &&
+      !this.state.annotations[part.id]?.length &&
+      (this.state.dimensions[part.id] ?? []).every((dimension) => dimension.automatic)
+    )
+      this.pendingArrangement.add(part.id);
+  }
 
   layout(part: Part): DrawingLayout {
     const key = this.settingsKey();
@@ -70,6 +80,7 @@ export class WorkspaceDocument {
       if (!this.hasLocks) {
         this.state.layouts = {};
         for (const history of this.histories.values()) history.invalidateLayouts();
+        for (const part of this.state.parts) this.arrangeGeneratedGear(part);
       }
       this.layoutSettingsKey = key;
     }
@@ -107,16 +118,33 @@ export class WorkspaceDocument {
       annotations: this.state.annotations[id] ?? [],
       layout: this.state.layouts[id],
       instructions: this.getInstructions(id),
+      gearSpecification: this.state.parts.find((part) => part.id === id)?.gearSpecification ?? null,
     });
   }
 
   setInstructions(partId: string, text: string): boolean {
-    if (!this.state.parts.some((part) => part.id === partId)) return false;
+    const part = this.state.parts.find((part) => part.id === partId);
+    if (!part) return false;
     const validated = parsePartInstructions(text);
     if (validated === this.getInstructions(partId)) return false;
     this.checkpointFor(partId);
     this.state.instructions[partId] = validated;
     if (!this.partHasLocks(partId)) delete this.state.layouts[partId];
+    this.arrangeGeneratedGear(part);
+    return true;
+  }
+
+  setGearSpecification(partId: string, specification?: GearSpecification): boolean {
+    const part = this.state.parts.find((part) => part.id === partId);
+    if (!part) return false;
+    const validated =
+      specification === undefined ? undefined : parseGearSpecification(specification);
+    if (JSON.stringify(validated) === JSON.stringify(part.gearSpecification)) return false;
+    this.checkpointFor(partId);
+    if (validated) part.gearSpecification = validated;
+    else delete part.gearSpecification;
+    if (!this.partHasLocks(partId)) delete this.state.layouts[partId];
+    this.arrangeGeneratedGear(part);
     return true;
   }
 
@@ -185,6 +213,7 @@ export class WorkspaceDocument {
       annotations: this.annotations,
       layout: this.state.layouts[id],
       instructions: this.getInstructions(id),
+      gearSpecification: this.active?.gearSpecification ?? null,
     };
     const result = this.history?.[direction](current);
     if (!result) return false;
@@ -192,6 +221,10 @@ export class WorkspaceDocument {
     this.state.dimensions[id] = result.dimensions;
     this.state.annotations[id] = result.annotations ?? [];
     if (result.instructions !== undefined) this.state.instructions[id] = result.instructions;
+    if (result.gearSpecification !== undefined && this.active) {
+      if (result.gearSpecification) this.active.gearSpecification = result.gearSpecification;
+      else delete this.active.gearSpecification;
+    }
     if (result.layout) this.state.layouts[id] = result.layout;
     else delete this.state.layouts[id];
     return true;

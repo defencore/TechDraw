@@ -26,6 +26,36 @@ export interface Projection {
   bounds: Bounds2;
   anchors?: { id: string; point: Point2; source: Point3 }[];
 }
+export interface GearGeometry {
+  axis: { origin: Point3; direction: Point3 };
+  toothCount: number;
+  toothDatumDirection?: Point3;
+  outsideDiameter: number;
+  rootDiameter: number;
+  faceWidth: number;
+  boreDiameter?: number;
+  hubDiameter?: number;
+  overallLength: number;
+  pinHoles?: { diameter: number; axis: { origin: Point3; direction: Point3 } }[];
+  profile: 'unverified';
+  evidence: 'repeated-tip-root-arcs';
+}
+/** Normal-system design data supplied by an engineer, independent of measured geometry. */
+export interface GearSpecification {
+  type: 'external-spur' | 'external-helical';
+  teeth?: number;
+  normalModule?: number;
+  normalPressureAngle?: number;
+  profileShift?: number;
+  helixAngle?: number;
+  helixHand?: 'left' | 'right';
+  profileReference?: string;
+  accuracy?: string;
+  inspection?: string;
+  toothSurfaceFinish?: string;
+  heatTreatment?: string;
+  toothEdge?: string;
+}
 export interface Part {
   id: string;
   name: string;
@@ -38,7 +68,9 @@ export interface Part {
   bounds: { min: Point3; max: Point3 };
   views: Projection[];
   warnings: string[];
+  gearSpecification?: GearSpecification;
   features?: {
+    gear?: GearGeometry;
     circles: {
       id: string;
       center: Point3;
@@ -69,6 +101,7 @@ export interface Dimension {
   offset: number;
   textOffset?: Point2;
   automatic: boolean;
+  minimumPrecision?: number;
   prefix?: string;
   suffix?: string;
   tolerance?: DimensionTolerance;

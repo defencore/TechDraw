@@ -11,6 +11,7 @@ The Open CASCADE WebAssembly kernel imports STEP geometry and computes precise h
 - Recover product names and assembly ancestry where the STEP representation permits a match.
 - Generate front, top, right and isometric views in a first-angle arrangement.
 - Suggest overall dimensions, visible full-circle diameters, hole-centre coordinates and verified orthogonal features. Coaxial shaft circles provide exact journal diameters and shoulder or groove stations.
+- Recognize a bounded set of straight cylindrical gear profiles, measure repeated teeth and stock features, and keep supplied gear engineering data separate from those measurements.
 - Choose a balanced automatic dimension set or all recognized baseline coordinates; reposition the result to suit the part.
 - Use six visible dimension icons in a compact floating dock: Horizontal, Vertical, Aligned, Diameter, Radius and Angle. Tooltips identify each tool and its shortcut. Preview before placement, drag labels or dimension lines, remove dimensions, and undo or redo changes.
 - Edit a selected dimension in a compact panel with tolerance-mode buttons for None, ±, upper/lower deviations or a manually entered fit designation. Tolerances remain editable in saved projects and appear in PDF exports.
@@ -43,7 +44,7 @@ Automatic dimensions are geometric suggestions. The app does not import semantic
 5. Use **Markup** for review text or graphics. Open **Instructions** to write manufacturing steps for the active part, then choose **Apply instructions** to preview them on its drawing. **Project description** in the parts panel holds separate project handover text.
 6. For an assembly or several files, choose **Drawings for all parts** to select every part and prepare its sheet. Choose **Export** for a multipage PDF, or **Copy image** for a PNG preview of the active drawing. Use **Save** (`Ctrl/⌘+S`) to download the complete local project archive; **Open project** restores it. SVG export uses the active part.
 
-The inspector tabs are **Dimensions**, **Markup**, **Instructions**, **Sheet** and **Title block**.
+The inspector tabs are **Dimensions**, **Markup**, **Instructions**, **Gear**, **Sheet** and **Title block**.
 
 ## Manufacturing instructions and drawing sets
 
@@ -54,6 +55,20 @@ The inspector tabs are **Dimensions**, **Markup**, **Instructions**, **Sheet** a
 Instruction text changes the space available for views. An unlocked part receives a new layout when needed; locked drawing positions remain fixed. Review the warnings if the notes are too long or overlap the fixed drawing. Shorten the text, unlock and arrange the drawing, or use a larger sheet. PDF export refuses overflowing content. Per-part instructions are independent of the cached shared technical notes and the project description.
 
 **Drawings for all parts** prepares a sheet for every imported element and selects every part for export. It does not start a download. **Export** then creates one PDF page per selected part; **Save** keeps all parts, their dimensions, markup, instructions and layouts in one ZIP. Placed components from the same STEP file share one archived original rather than duplicating it for each drawing.
+
+## Gear drawings
+
+Open **Gear** to review detected geometry and enter the manufacturing specification for the active part. For supported straight cylindrical profiles, the CAD kernel measures a repeated tooth count, tip/root diameters, face width, overall length and available hub, through-bore and radial-hole features. Gear-specific suggestions describe these features rather than dimensioning individual teeth. A tooth datum uses the midpoint of an actual modeled tip arc; radial-hole orientation still needs an engineering tolerance and inspection requirement.
+
+Gear dimensions retain enough decimal places for the measured nominal value: a bore of **Ø3.175** stays Ø3.175 even when the sheet is set to two decimal places. Display precision does not specify a tolerance.
+
+Measured geometry does not establish the gear's module, pressure angle, profile shift, accuracy or tooth profile standard. Source-name text is shown separately as an unverified hint. Supply the external spur/helical type, normal module, normal pressure angle, profile shift, profile reference, accuracy/backlash, inspection dimensions and limits, flank finish and tooth-edge treatment. Helical specifications also require helix angle and hand. Material remains in **Title block**; heat treatment and hardness have a separate gear field. No 20° pressure angle or zero profile shift is assumed.
+
+Choose **Apply gear data** to update the drawing, or **Reset draft** to discard pending changes. Save/export actions validate and include pending gear data from every part. Applied values, detected evidence and the resulting layout survive Undo/Redo and JSON/ZIP reopening. Generated gear dimensions are arranged again for a changed sheet, gear table or instruction footprint when the drawing has only automatic dimensions and no review marks. Authored dimensions and locked positions are retained; review fit warnings before export.
+
+The printed parameter table groups basic, inspection and reference data using [GOST 2.403-75](https://files.stroyinf.ru/Data/29/2907.pdf). Reference diameter uses supplied normal-system data: `d = mn × z` for spur gears and `d = mn × z / cos β` for helical gears, as described in [KHK's basic gear guide](https://khkgears.us/media/fqrlut1m/abcs-of-gearing-b.pdf). Missing information remains marked **Specify**, and incomplete or conflicting data prints a **DRAFT** heading. The table, detected dimensions and modeled tooth contour do not constitute a complete manufacturing approval or certify compliance with the standard.
+
+Automatic recognition requires 6–400 repeated circular tip/root patches with straight axial boundaries and a consistent common axis. It does not recognize every filleted, simplified, helical, internal, bevel or worm profile. Engineering data can be entered manually when detection is unavailable; additional views, datums and inspection specifications may still be needed. Exact end-view gear dimensions require a face-on orthographic axis; an oblique source orientation needs reorientation in the source CAD application. Choose a larger sheet or shorten entered text if the table does not fit.
 
 ## Local projects and source files
 
@@ -165,7 +180,7 @@ npm run preview
 
 The production output is `dist/`. Serve it over HTTP or HTTPS; opening `index.html` directly from the filesystem is not supported. The CAD kernel is loaded from the same static deployment, including its WebAssembly asset. No external CAD service is needed.
 
-Tests exercise real STEP geometry, DXF entities and units, ZIP source preservation and tamper rejection, paper annotations, localization boundaries, image crops, wake-lock lifecycle, assemblies, exact dimensions, paper layout, viewport navigation and history. Browser review is still required for interaction, PDF rendering and platform clipboard/share/fullscreen behavior.
+Tests exercise real STEP geometry, generated gear profiles and source units, DXF entities and units, ZIP source preservation and tamper rejection, paper annotations, localization boundaries, image crops, wake-lock lifecycle, assemblies, exact dimensions, paper layout, viewport navigation and history. Browser review is still required for interaction, PDF rendering and platform clipboard/share/fullscreen behavior.
 
 See [architecture](docs/ARCHITECTURE.md) for module ownership and extension points, and [deployment](docs/DEPLOYMENT.md) for GitHub Pages and the custom domain.
 

@@ -42,6 +42,16 @@ function translated(text: string): string {
   if (Object.hasOwn(ukMessages, text)) return ukMessages[text];
   const rules: [RegExp, (...values: string[]) => string][] = [
     [
+      /^Gear manufacturing data is incomplete: (.+)\. Specify these values before manufacture\.$/,
+      (labels) =>
+        `Параметри виготовлення шестерні неповні: ${labels.split(/,\s*/).map(translated).join(', ')}. Укажіть ці значення перед виготовленням.`,
+    ],
+    [
+      /^Gear tooth count conflicts with measured geometry: specified (\d+), measured (\d+)\. Resolve the mismatch before manufacture\.$/,
+      (specified, measured) =>
+        `Кількість зубців не відповідає виміряній геометрії: задано ${specified}, виміряно ${measured}. Усуньте невідповідність перед виготовленням.`,
+    ],
+    [
       /^([0-9]+) DXF text entities were preserved as source notes; their original formatting and placement remain in the original file\.$/,
       (count) =>
         `${count} текстових об’єктів DXF збережено як примітки джерела; оригінальне форматування та положення залишаються у вихідному файлі.`,

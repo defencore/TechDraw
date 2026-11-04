@@ -474,6 +474,14 @@ export const commandDefinitions = [
     active: (context: CommandContext) => context.inspectorTab === 'instructions',
   },
   {
+    id: 'tab:gear',
+    label: 'Open gear parameters',
+    group: 'Panels',
+    icon: 'layers',
+    keywords: ['gear', 'teeth', 'module', 'pressure angle', 'inspection', 'manufacture'],
+    active: (context: CommandContext) => context.inspectorTab === 'gear',
+  },
+  {
     id: 'tab:annotations',
     label: 'Open markup tools',
     group: 'Panels',

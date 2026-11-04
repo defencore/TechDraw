@@ -9,6 +9,7 @@ import type {
   ViewId,
 } from '../model';
 import { readStepProducts, stepPartDisplayName, type StepProduct } from './step-metadata';
+import { analyzeGearShape } from './gear-analysis';
 import type { BRepAdaptor_Curve, TopAbs_ShapeEnum, TopoDS_Shape } from 'replicad-opencascadejs';
 
 export type CadProgress = (message: string) => void;
@@ -560,6 +561,7 @@ function toPart(
     throw new Error(
       `Part ${index + 1} contains ${count} edges. Split this model into smaller STEP files (limit: ${MAX_EDGES_PER_PART} edges per part).`,
     );
+  const gear = analyzeGearShape(shape);
   const warnings: string[] = [];
   const analyzer = new oc.BRepCheck_Analyzer(shape.wrapped, true, false, false);
   try {
@@ -606,7 +608,7 @@ function toPart(
     unit: 'mm',
     bounds,
     views,
-    features: { circles: sourceCircles },
+    features: { circles: sourceCircles, ...(gear ? { gear } : {}) },
     warnings,
   };
 }

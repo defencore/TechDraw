@@ -466,6 +466,7 @@ export class DrawingCanvas {
       renderWorkspaceGrid(
         drawingPage(
           drawingSettingsForInstructions(this.document.settings, this.document.instructions),
+          this.document.part,
         ).content,
         this.grid,
         getViewportTransform(this.viewport, this.metrics).scale,
@@ -1239,6 +1240,7 @@ export class DrawingCanvas {
     if (!this.document || !this.sheet) return false;
     const frame = drawingPage(
       drawingSettingsForInstructions(this.document.settings, this.document.instructions),
+      this.document.part,
     ).content;
     const bounds = dimensionGeometry(
       dimension,

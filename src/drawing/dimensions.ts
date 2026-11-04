@@ -5,6 +5,11 @@ import {
   formatDimensionLabel,
 } from './dimension-label';
 import { dimensionGeometry } from './dimension-geometry';
+import {
+  gearDatumPaperGeometry,
+  gearDrawingOrientation,
+  measuredGearDimensions,
+} from './gear-dimensions';
 
 const near = (a: number, b: number) => Math.abs(a - b) < 1e-5;
 const unique = (values: number[]) =>
@@ -77,6 +82,8 @@ function arrangeCircleCallouts(result: Dimension[], scale: number, precision: nu
       .map(
         (dimension) => dimensionGeometry(dimension, { x: 0, y: 0, scale }, precision).labelBounds,
       );
+    const datum = part ? gearDatumPaperGeometry(part, viewId, { x: 0, y: 0, scale }) : undefined;
+    if (datum) occupied.push(datum.labelBounds);
     const obstacles = (projection?.edges ?? []).filter(
       (edge) =>
         !edge.hidden &&
@@ -164,6 +171,13 @@ export function arrangeDimensions(
     b: [...d.b] as Point2,
     ...(d.vertex ? { vertex: [...d.vertex] as Point2 } : {}),
   }));
+  if (options.part?.features?.gear) {
+    let lane = 0;
+    for (const dimension of result)
+      if (!dimension.locked && dimension.automatic && dimension.kind === 'angle')
+        dimension.offset =
+          (options.part.features.gear.outsideDiameter * scale) / 2 + 8 + lane++ * 6;
+  }
   interface Span {
     dimension: Dimension;
     min: number;
@@ -542,6 +556,12 @@ function shaftFeatures(part: Part):
 }
 
 export function autoDimensionWarnings(part: Part, dimensions?: Dimension[]): string[] {
+  if (part.features?.gear)
+    return gearDrawingOrientation(part)
+      ? []
+      : [
+          'The measured gear axis is not aligned with an orthographic view. Orient the model before adding gear dimensions.',
+        ];
   const shaft = shaftFeatures(part);
   if (shaft) {
     const axis = shaft.horizontal ? 0 : 1;
@@ -606,6 +626,7 @@ export function autoDimensionWarnings(part: Part, dimensions?: Dimension[]): str
 
 /** Suggest geometric dimensions only. STEP geometry cannot supply manufacturing intent. */
 export function autoDimensions(part: Part, detail: 'balanced' | 'full' = 'balanced'): Dimension[] {
+  if (part.features?.gear) return arrangeDimensions(measuredGearDimensions(part), { part });
   const dimensions: Dimension[] = [];
   let serial = 0;
   const push = (

@@ -1,6 +1,7 @@
 import { titleBlockDefaults, titleBlockKeys } from './drawing/title-block-data';
 import { parseDimensionTolerance } from './drawing/tolerances';
 import { annotationColor } from './drawing/annotation-style';
+import { parseGearGeometry, parseGearSpecification } from './gears/specification';
 import type {
   Bounds2,
   Dimension,
@@ -225,6 +226,13 @@ function part(value: unknown, budget: Budget): Part {
     result.sourceNotes = array(p.sourceNotes, 1000, 'source notes').map((value) =>
       string(value, 'source note', 10000),
     );
+  if (p.gearSpecification !== undefined) {
+    try {
+      result.gearSpecification = parseGearSpecification(p.gearSpecification);
+    } catch (error) {
+      return invalid(error instanceof Error ? error.message : 'invalid gear specification.');
+    }
+  }
   if (p.features !== undefined) {
     const features = record(p.features, 'analytic features');
     const ids = new Set<string>();
@@ -248,6 +256,13 @@ function part(value: unknown, budget: Budget): Part {
         };
       }),
     };
+    if (features.gear !== undefined) {
+      try {
+        result.features.gear = parseGearGeometry(features.gear);
+      } catch (error) {
+        return invalid(error instanceof Error ? error.message : 'invalid gear geometry.');
+      }
+    }
   }
   return result;
 }
@@ -270,6 +285,12 @@ function dimension(value: unknown, budget: Budget): Dimension {
   };
   if (d.vertex !== undefined) output.vertex = point(d.vertex, 2, 'angle vertex');
   if (d.locked !== undefined) output.locked = boolean(d.locked, 'dimension locked flag');
+  if (d.minimumPrecision !== undefined) {
+    const precision = numeric(d.minimumPrecision, 'minimum dimension precision', 6);
+    if (!Number.isInteger(precision) || precision < 0)
+      return invalid('minimum dimension precision must be an integer from 0 to 6.');
+    output.minimumPrecision = precision;
+  }
   if (d.textOffset !== undefined) output.textOffset = point(d.textOffset, 2, 'label offset');
   if (d.prefix !== undefined) output.prefix = string(d.prefix, 'dimension prefix', 1000);
   if (d.suffix !== undefined) output.suffix = string(d.suffix, 'dimension suffix', 1000);

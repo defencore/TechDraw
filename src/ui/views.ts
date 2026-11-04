@@ -4,6 +4,7 @@ import { button, option } from './components';
 import { icon } from './icons';
 import { t } from './i18n';
 import { escapeHtml as e } from './utils';
+import { partDisplayLabel } from './part-label';
 import { renderTitleBlockEditor } from './title-block-editor';
 import { renderDimensionEditor } from './dimension-editor';
 import { STANDARD_DRAWING_SCALES } from '../drawing/page-layout';
@@ -24,6 +25,7 @@ interface ViewContext {
   collapsedBranches: Set<string>;
   annotationPanel?: string;
   instructionsPanel?: string;
+  gearPanel?: string;
   hasLockedItems?: boolean;
 }
 
@@ -38,12 +40,13 @@ export function createWorkspaceViews({
   collapsedBranches,
   annotationPanel,
   instructionsPanel,
+  gearPanel,
   hasLockedItems = false,
 }: ViewContext) {
   const active = () => state.parts.find((p) => p.id === state.activeId);
   const dims = () => (state.activeId ? (state.dimensions[state.activeId] ?? []) : []);
   function partRow(p: Part): string {
-    return `<div class="part-row ${p.id === state.activeId ? 'active' : ''}"><input type="checkbox" data-part-check="${e(p.id)}" aria-label="Include ${e(p.name)} in PDF" ${state.selected.has(p.id) ? 'checked' : ''}/><button class="part-select" data-part-id="${e(p.id)}" title="${e(p.path.join(' / '))}">${icon('cube')}<span><strong>${e(p.name)}</strong><small>${p.bounds.max.map((v, i) => Math.abs(v - p.bounds.min[i]).toFixed(1)).join(' × ')} mm</small></span></button><button class="part-remove" data-remove-part="${e(p.id)}" aria-label="Remove ${e(p.name)}" title="Remove part">${icon('close')}</button></div>`;
+    return `<div class="part-row ${p.id === state.activeId ? 'active' : ''}"><input type="checkbox" data-part-check="${e(p.id)}" aria-label="Include ${e(p.name)} in PDF" ${state.selected.has(p.id) ? 'checked' : ''}/><button class="part-select" data-part-id="${e(p.id)}" title="${e(p.path.join(' / '))}">${icon('cube')}<span><strong>${e(partDisplayLabel(p.name))}</strong><small>${p.bounds.max.map((v, i) => Math.abs(v - p.bounds.min[i]).toFixed(1)).join(' × ')} mm</small></span></button><button class="part-remove" data-remove-part="${e(p.id)}" aria-label="Remove ${e(p.name)}" title="Remove part">${icon('close')}</button></div>`;
   }
   function assemblyTree(parts: Part[], depth: number, source: string): string {
     const leaves = parts.filter((p) => p.path.length <= depth + 1);
@@ -103,6 +106,7 @@ export function createWorkspaceViews({
       return `${renderTitleBlockEditor(s, part?.name)}${part?.sourceNotes?.length ? `<details class="source-notes"><summary>DXF source notes</summary><p class="field-help">DXF notes are reference text from the source file, not measured geometry.</p>${part.sourceNotes.map((note) => `<p data-user-content>${e(note)}</p>`).join('')}</details>` : ''}${part?.warnings.length ? `<div class="geometry-note"><strong>Import notes</strong>${part.warnings.map((w) => `<p>${e(w)}</p>`).join('')}</div>` : ''}`;
     if (inspectorTab === 'annotations') return annotationPanel ?? '';
     if (inspectorTab === 'instructions') return instructionsPanel ?? '';
+    if (inspectorTab === 'gear') return gearPanel ?? '';
     const selectedCount = dims().filter((item) => selectedDimensionIds.has(item.id)).length;
     const lockedCount = dims().filter(
       (item) => selectedDimensionIds.has(item.id) && item.locked,

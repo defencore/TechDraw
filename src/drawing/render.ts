@@ -21,6 +21,8 @@ import {
   projectionMetrics,
 } from './page-layout';
 import { isGostTemplate, renderGostForm1 } from './gost-form1';
+import { renderGearTable } from './gear-table';
+import { gearDatumPaperGeometry, gearReferenceCircles } from './gear-dimensions';
 export { paperSize } from './page-layout';
 export type { ViewTransform } from './dimension-geometry';
 
@@ -135,6 +137,27 @@ function projectionMarkup(view: Projection, t: ViewTransform, settings: DrawingS
   return markup;
 }
 
+function gearReferences(part: Part, view: ViewId, transform: ViewTransform): string {
+  let svg = gearReferenceCircles(part, view)
+    .map((circle) => {
+      const center = toPaper(circle.center, transform);
+      return `<circle data-gear-reference="${circle.kind}" cx="${n(center[0])}" cy="${n(center[1])}" r="${n(circle.radius * transform.scale)}" fill="none" stroke="#667983" stroke-width=".15" stroke-dasharray="${circle.kind === 'pitch' ? '4 1 .7 1' : '1.5 1'}"/>`;
+    })
+    .join('');
+  const datum = gearDatumPaperGeometry(part, view, transform);
+  if (datum) {
+    svg += `<g data-gear-datum="A" fill="none" stroke="#667983" stroke-width=".15" stroke-dasharray="4 1 .7 1">${datum.lines.map((segment) => line(segment.a, segment.b)).join('')}</g>`;
+    svg += text(
+      datum.label[0],
+      datum.label[1],
+      'A',
+      3,
+      'data-gear-datum-label="A" text-anchor="middle" fill="#20262b"',
+    );
+  }
+  return svg;
+}
+
 const glyphWidth = (character: string): number =>
   /[ilI1.,:;!'|]/.test(character)
     ? 0.34
@@ -202,7 +225,7 @@ export function renderDrawing(
   options: DrawingRenderOptions = {},
 ): RenderedDrawing {
   settings = drawingSettingsForInstructions(settings, options.instructions);
-  const page = drawingPage(settings);
+  const page = drawingPage(settings, part);
   const { width, height, left, right, top, bottom, blockHeight } = page;
   const { minX: clipLeft, minY: clipTop, maxX: clipRight, maxY: clipBottom } = page.content;
   const gost = isGostTemplate(settings.template);
@@ -215,6 +238,7 @@ export function renderDrawing(
     ? drawingLayoutFits(part, dimensions, settings, layoutOverride)
     : calculated!.fits;
   const warnings: string[] = autoDimensionWarnings(part, dimensions);
+  if (page.gearTable) warnings.push(...page.gearTable.warnings);
   if (
     options.annotations?.some((annotation) => {
       const bounds = annotationBounds(annotation);
@@ -240,9 +264,9 @@ export function renderDrawing(
     const t = transforms[view.id];
     if (!t) throw new Error(`Missing ${view.id} drawing transform.`);
     const metrics =
-      calculated?.metrics[view.id] ?? projectionMetrics(view, dimensions, t.scale, settings);
+      calculated?.metrics[view.id] ?? projectionMetrics(view, dimensions, t.scale, settings, part);
     const caption = metrics.caption;
-    views += `<g data-projection="${view.id}">${text(caption.origin[0] + t.x, caption.origin[1] + t.y, caption.text, 2.5, 'text-anchor="middle" fill="#69737b" letter-spacing=".7"')}${projectionMarkup(view, t, settings)}${dimensions
+    views += `<g data-projection="${view.id}">${text(caption.origin[0] + t.x, caption.origin[1] + t.y, caption.text, 2.5, 'text-anchor="middle" fill="#69737b" letter-spacing=".7"')}${gearReferences(part, view.id, t)}${projectionMarkup(view, t, settings)}${dimensions
       .filter((d) => d.viewId === view.id)
       .map((d) => renderDimension(d, t, settings.precision, d.id === selectedDimensionId))
       .join('')}</g>`;
@@ -386,7 +410,7 @@ export function renderDrawing(
   const header = gost
     ? ''
     : `<g stroke="none">${text(left + 3, top + 5, `${templateName} · ${part.sourceName}`.slice(0, 100), 2.2, 'fill="#7a838a"')}${text(width - right - 3, top + 5, 'GEOMETRIC DRAFT · REVIEW REQUIRED', 2.2, 'text-anchor="end" fill="#7a838a"')}</g>`;
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}mm" height="${height}mm" viewBox="0 0 ${width} ${height}" role="img" aria-label="Technical drawing of ${escapeXml(part.name)}" style="font-family:Arial,Helvetica,sans-serif;background:white;color:#20262b"><defs><clipPath id="sheet-content"><rect x="${clipLeft}" y="${clipTop}" width="${clipRight - clipLeft}" height="${clipBottom - clipTop}"/></clipPath></defs><rect width="${width}" height="${height}" fill="white"/><g fill="#20262b" stroke="#20262b"><rect x="${left}" y="${top}" width="${width - left - right}" height="${height - top - bottom}" fill="none" stroke-width=".5"/>${header}<g clip-path="url(#sheet-content)" stroke="none">${views}</g><g stroke="none">${noteMarkup}</g>${titleBlock}</g></svg>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}mm" height="${height}mm" viewBox="0 0 ${width} ${height}" role="img" aria-label="Technical drawing of ${escapeXml(part.name)}" style="font-family:Arial,Helvetica,sans-serif;background:white;color:#20262b"><defs><clipPath id="sheet-content"><rect x="${clipLeft}" y="${clipTop}" width="${clipRight - clipLeft}" height="${clipBottom - clipTop}"/></clipPath></defs><rect width="${width}" height="${height}" fill="white"/><g fill="#20262b" stroke="#20262b"><rect x="${left}" y="${top}" width="${width - left - right}" height="${height - top - bottom}" fill="none" stroke-width=".5"/>${header}<g clip-path="url(#sheet-content)" stroke="none">${views}</g>${page.gearTable ? renderGearTable(page.gearTable) : ''}<g stroke="none">${noteMarkup}</g>${titleBlock}</g></svg>`;
   const annotated = applyDrawingAppearance(svg, options.appearance).replace(
     '</svg>',
     `${renderAnnotations(options.annotations ?? [], options.appearance)}</svg>`,

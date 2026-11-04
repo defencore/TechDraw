@@ -12,6 +12,8 @@ import { dimensionGeometry, type ViewTransform } from './dimension-geometry';
 import { measureDimensionText } from './dimension-label';
 import { isGostTemplate } from './gost-form1';
 import { sheetNotes, type SheetNotes } from './sheet-notes';
+import { gearTableLayout, type GearTableLayout } from './gear-table';
+import { gearDatumPaperGeometry, gearReferenceCircles } from './gear-dimensions';
 
 /** GOST 2.302-68 clause 2, ordered from the largest to the smallest part-drawing scale. */
 export const STANDARD_DRAWING_SCALES = [
@@ -43,6 +45,14 @@ export const STANDARD_DRAWING_SCALES = [
   1 / 800,
   1 / 1000,
 ] as const;
+
+/** Automatic gear fitting retains a readable tooth envelope; explicit scales remain unrestricted. */
+export function automaticDrawingScales(part: Part): readonly number[] {
+  const diameter = part.features?.gear?.outsideDiameter;
+  if (!diameter) return STANDARD_DRAWING_SCALES;
+  const readable = STANDARD_DRAWING_SCALES.filter((scale) => diameter * scale >= 10 - 1e-9);
+  return readable.length ? readable : [STANDARD_DRAWING_SCALES[0]];
+}
 export interface DrawingPage {
   width: number;
   height: number;
@@ -54,6 +64,7 @@ export interface DrawingPage {
   content: Bounds2;
   fittingArea: Bounds2;
   notes: SheetNotes;
+  gearTable?: GearTableLayout;
 }
 export interface ProjectionMetrics {
   model: Bounds2;
@@ -76,7 +87,7 @@ export function paperSize(
   const [short, long] = formats[settings.format];
   return settings.orientation === 'landscape' ? [long, short] : [short, long];
 }
-export function drawingPage(settings: DrawingSettings): DrawingPage {
+export function drawingPage(settings: DrawingSettings, part?: Part): DrawingPage {
   const [width, height] = paperSize(settings),
     gost = isGostTemplate(settings.template);
   const left = gost ? 20 : 10,
@@ -93,6 +104,18 @@ export function drawingPage(settings: DrawingSettings): DrawingPage {
     maxX: width - right - 1 - designationReserve,
     maxY: notes.contentBottom,
   };
+  const gearTable = part
+    ? gearTableLayout(part, settings, {
+        ...content,
+        minY: top + (gost ? 20 : 10),
+      })
+    : undefined;
+  if (gearTable) {
+    // A narrow portrait sheet cannot hold fixed-size annotation text in a slim side column.
+    // Keep its table in the upper right and use the full-width area below it instead.
+    if (gearTable.bounds.minX - 8 - content.minX < 100) content.minY = gearTable.bounds.maxY + 8;
+    else content.maxX = gearTable.bounds.minX - 8;
+  }
   return {
     width,
     height,
@@ -102,10 +125,11 @@ export function drawingPage(settings: DrawingSettings): DrawingPage {
     bottom,
     blockHeight,
     notes,
+    gearTable,
     content,
     fittingArea: {
       minX: left + 5,
-      minY: top + (gost ? 20 : 10),
+      minY: Math.max(top + (gost ? 20 : 10), content.minY + 4),
       maxX: content.maxX - 4,
       maxY: content.maxY - 4,
     },
@@ -120,12 +144,13 @@ function union(target: Bounds2, bounds: Bounds2): void {
 const widthOf = (bounds: Bounds2) => bounds.maxX - bounds.minX;
 const heightOf = (bounds: Bounds2) => bounds.maxY - bounds.minY;
 
-/** Captions follow the model contour, independent of manual annotation movement. */
+/** Gear captions clear their surrounding callouts; other captions follow the model contour. */
 export function projectionMetrics(
   view: Projection,
   dimensions: Dimension[],
   scale: number,
   settings: DrawingSettings,
+  part?: Part,
 ): ProjectionMetrics {
   const model: Bounds2 = {
     minX: view.bounds.minX * scale,
@@ -134,6 +159,14 @@ export function projectionMetrics(
     maxY: -view.bounds.minY * scale,
   };
   const occupied = { ...model };
+  if (part)
+    for (const circle of gearReferenceCircles(part, view.id)) {
+      const [x, y] = [circle.center[0] * scale, -circle.center[1] * scale];
+      const radius = circle.radius * scale + 0.1;
+      union(occupied, { minX: x - radius, maxX: x + radius, minY: y - radius, maxY: y + radius });
+    }
+  const datum = part ? gearDatumPaperGeometry(part, view.id, { x: 0, y: 0, scale }) : undefined;
+  if (datum) union(occupied, datum.bounds);
   if (settings.centerLines)
     for (const edge of view.edges) {
       if (
@@ -164,7 +197,10 @@ export function projectionMetrics(
     settings.template === 'eskd-uk'
       ? ({ front: 'СПЕРЕДУ', top: 'ЗВЕРХУ', right: 'СПРАВА', iso: 'ІЗОМЕТРІЯ' } as const)[view.id]
       : view.name.toUpperCase();
-  const captionOrigin: Point2 = [(model.minX + model.maxX) / 2, model.minY - 5];
+  const captionOrigin: Point2 = [
+    (model.minX + model.maxX) / 2,
+    (part?.features?.gear ? occupied.minY : model.minY) - 5,
+  ];
   const captionWidth =
     measureDimensionText(captionText, 2.5) +
     Math.max(0, Array.from(captionText).length - 1) * 0.7 +
@@ -186,9 +222,9 @@ function calculateAtScale(
 ): CalculatedDrawingLayout {
   if (!Number.isFinite(scale) || scale <= 0)
     throw new RangeError('Drawing scale must be a positive finite number.');
-  const page = drawingPage(settings);
+  const page = drawingPage(settings, part);
   const metrics = Object.fromEntries(
-    part.views.map((view) => [view.id, projectionMetrics(view, dimensions, scale, settings)]),
+    part.views.map((view) => [view.id, projectionMetrics(view, dimensions, scale, settings, part)]),
   ) as Record<ViewId, ProjectionMetrics>;
   if (part.views.length === 1 && part.views[0].id === 'front') {
     const bounds = metrics.front.occupied,
@@ -304,11 +340,12 @@ export function calculateDrawingLayout(
 ): CalculatedDrawingLayout {
   if (settings.scale !== 'auto')
     return calculateAtScale(part, dimensions, settings, settings.scale);
-  for (const scale of STANDARD_DRAWING_SCALES) {
+  const candidates = automaticDrawingScales(part);
+  for (const scale of candidates) {
     const candidate = calculateAtScale(part, dimensions, settings, scale);
     if (candidate.fits) return candidate;
   }
-  return calculateAtScale(part, dimensions, settings, STANDARD_DRAWING_SCALES.at(-1)!);
+  return calculateAtScale(part, dimensions, settings, candidates.at(-1)!);
 }
 
 /** Frozen projects retain their exact transforms; validation never recentres or rescales them. */
@@ -318,7 +355,7 @@ export function drawingLayoutFits(
   settings: DrawingSettings,
   layout: DrawingLayout,
 ): boolean {
-  const frame = drawingPage(settings).content;
+  const frame = drawingPage(settings, part).content;
   return (
     Number.isFinite(layout.scale) &&
     layout.scale > 0 &&
@@ -331,7 +368,7 @@ export function drawingLayoutFits(
         Math.abs(transform.scale - layout.scale) > Math.max(1e-10, layout.scale * 1e-10)
       )
         return false;
-      const bounds = projectionMetrics(view, dimensions, transform.scale, settings).occupied;
+      const bounds = projectionMetrics(view, dimensions, transform.scale, settings, part).occupied;
       return (
         bounds.minX + transform.x >= frame.minX &&
         bounds.maxX + transform.x <= frame.maxX &&

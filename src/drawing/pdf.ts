@@ -86,6 +86,7 @@ export async function exportPdf(pages: PdfPage[], filename = 'techdraw.pdf'): Pr
         (w) =>
           w.startsWith('The selected scale') ||
           w.startsWith('Dimensions exceed') ||
+          w.startsWith('Gear parameter table exceeds') ||
           w.startsWith('Review annotations exceed'),
       ),
     )

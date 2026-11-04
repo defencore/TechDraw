@@ -622,6 +622,118 @@ export const ukMessages: Record<string, string> = {
   'Open markup tools': 'Відкрити інструменти позначок',
   Instructions: 'Інструкції',
   'Open manufacturing instructions': 'Відкрити вимоги до виготовлення',
+  Gear: 'Шестерня',
+  'Gear setup': 'Параметри шестерні',
+  'Gear parameters': 'Параметри зубчастого колеса',
+  'Open gear parameters': 'Відкрити параметри шестерні',
+  'Import a part to configure gear data.': 'Імпортуйте деталь, щоб задати параметри шестерні.',
+  'Gear data applied to this part.': 'Параметри шестерні застосовано до цієї деталі.',
+  'Gear data removed. Measured geometry remains available.':
+    'Параметри шестерні видалено. Виміряна геометрія залишається доступною.',
+  'Radial pin-hole orientation needs a tooth datum and an inspection requirement before manufacture. The table reports its measured model-axis direction.':
+    'Для орієнтації радіального отвору під штифт перед виготовленням потрібно задати базу відносно зуба та вимоги до контролю. Таблиця містить виміряний напрям осі отвору в моделі.',
+  'Gear parameter table exceeds the drawing area. Shorten the entered data or choose a larger sheet before export.':
+    'Таблиця параметрів шестерні виходить за область креслення. Скоротіть введені дані або виберіть більший аркуш перед експортом.',
+  'Finish or reset the gear draft before exporting.':
+    'Завершіть або скиньте чернетку параметрів шестерні перед експортом.',
+  'Gear type': 'Тип шестерні',
+  'Choose gear type': 'Виберіть тип шестерні',
+  'External spur gear': 'Зовнішнє прямозубе колесо',
+  'External helical gear': 'Зовнішнє косозубе колесо',
+  'Tooth count': 'Кількість зубців',
+  'Normal module': 'Нормальний модуль',
+  'Normal pressure angle': 'Нормальний кут профілю',
+  'Profile shift': 'Коефіцієнт зміщення',
+  'Helix angle': 'Кут нахилу зуба',
+  'Helix hand': 'Напрям лінії зуба',
+  'Helical gears only': 'Лише для косозубих коліс',
+  'Choose direction': 'Виберіть напрям',
+  'Left-hand': 'Лівий',
+  'Right-hand': 'Правий',
+  'Basic rack / tooth profile': 'Вихідний контур / профіль зуба',
+  'Accuracy and backlash': 'Точність і бічний зазор',
+  'Inspection dimensions': 'Розміри для контролю',
+  'Tooth flank finish': 'Шорсткість бічної поверхні зуба',
+  'Heat treatment and hardness': 'Термообробка й твердість',
+  'Tooth edge treatment': 'Обробка кромок зубців',
+  'Measured geometry': 'Виміряна геометрія',
+  'From STEP': 'Зі STEP',
+  'Outside diameter': 'Діаметр вершин зубців',
+  'Root diameter': 'Діаметр западин',
+  'Face width': 'Ширина зубчастого вінця',
+  'Bore diameter': 'Діаметр отвору',
+  'Hub diameter': 'Діаметр маточини',
+  'Overall length': 'Загальна довжина',
+  'These measurements do not verify the tooth profile or manufacturing specification.':
+    'Ці вимірювання не підтверджують профіль зуба чи вимоги до виготовлення.',
+  'No gear geometry was detected. Enter the specification manually.':
+    'Геометрію шестерні не виявлено. Задайте параметри вручну.',
+  'Unverified source-name hints': 'Непідтверджені підказки з назви',
+  Module: 'Модуль',
+  'Names are labels, not manufacturing data. Values are not applied automatically.':
+    'Назви є позначеннями, а не вимогами до виготовлення. Значення не застосовуються автоматично.',
+  'Engineer supplied': 'Задано конструктором',
+  Draft: 'Чернетка',
+  Specify: 'Укажіть',
+  'Unapplied draft. Apply checks the current values.':
+    'Незастосована чернетка. Під час застосування значення буде перевірено.',
+  'Manufacturing data needs review': 'Вимоги до виготовлення потребують перевірки',
+  'Review the supplied gear data before manufacture':
+    'Перед виготовленням перевірте задані параметри шестерні',
+  'Still to specify': 'Ще потрібно вказати',
+  'The supplied tooth count differs from the measured geometry. Review both before manufacture.':
+    'Задана кількість зубців відрізняється від виміряної геометрії. Перевірте обидва значення перед виготовленням.',
+  'Module and pressure angle use the normal system. No pressure angle or profile shift is assumed.':
+    'Модуль і кут профілю задано в нормальному перерізі. Значення кута профілю чи зміщення не припускаються.',
+  'Profile, accuracy and inspection': 'Профіль, точність і контроль',
+  'Enter the applicable profile and accuracy standard. Specify a verified inspection method and its limits.':
+    'Укажіть застосовний стандарт профілю й точності. Задайте перевірений метод контролю та його граничні значення.',
+  'Finish and treatment': 'Шорсткість і обробка',
+  'Calculated reference diameter': 'Розрахунковий ділильний діаметр',
+  'Material is defined in Title block for the drawing set.':
+    'Матеріал задається в основному написі для всього комплекту креслень.',
+  'Apply gear data': 'Застосувати параметри',
+  'Remove gear data': 'Видалити параметри',
+  'The parameter table appears on this part drawing. Removing supplied data keeps detected geometry and its draft table.':
+    'Таблиця параметрів додається на креслення цієї деталі. Видалення заданих даних зберігає виявлену геометрію та чернетку її таблиці.',
+  'Insert a symbol': 'Вставити символ',
+  'Insert plus-minus sign': 'Вставити знак плюс-мінус',
+  'Insert diameter sign': 'Вставити знак діаметра',
+  'Enter a decimal value for {field}.': 'Укажіть десяткове число для поля «{field}».',
+  'Invalid gear data: choose an external spur or helical gear.':
+    'Некоректні параметри шестерні: виберіть зовнішнє прямозубе або косозубе колесо.',
+  'Invalid gear data: tooth count is outside the supported range.':
+    'Некоректні параметри шестерні: кількість зубців має бути від 2 до 2000.',
+  'Invalid gear data: tooth count must be an integer.':
+    'Некоректні параметри шестерні: кількість зубців має бути цілим числом.',
+  'Invalid gear data: normal module is outside the supported range.':
+    'Некоректні параметри шестерні: нормальний модуль має бути від 0.000001 до 1000 мм.',
+  'Invalid gear data: normal pressure angle is outside the supported range.':
+    'Некоректні параметри шестерні: нормальний кут профілю має бути від 0.001° до 89.9°.',
+  'Invalid gear data: profile shift is outside the supported range.':
+    'Некоректні параметри шестерні: коефіцієнт зміщення має бути від -20 до 20.',
+  'Invalid gear data: helix angle is outside the supported range.':
+    'Некоректні параметри шестерні: кут нахилу зуба має бути від 0.001° до 89.9°.',
+  'Invalid gear data: invalid helix hand.':
+    'Некоректні параметри шестерні: виберіть лівий або правий напрям зуба.',
+  'Invalid gear data: spur gears do not have helical parameters.':
+    'Некоректні параметри шестерні: прямозубе колесо не має параметрів нахилу зуба.',
+  'Invalid gear data: unknown specification field.':
+    'Некоректні параметри шестерні: невідоме поле специфікації.',
+  'Invalid gear data: expected an object.':
+    'Некоректні параметри шестерні: очікується об’єкт даних.',
+  'Invalid gear data: profileReference must be bounded plain text.':
+    'Некоректні параметри шестерні: опис вихідного контуру має бути звичайним текстом до 400 символів.',
+  'Invalid gear data: accuracy must be bounded plain text.':
+    'Некоректні параметри шестерні: вимоги до точності мають бути звичайним текстом до 400 символів.',
+  'Invalid gear data: inspection must be bounded plain text.':
+    'Некоректні параметри шестерні: дані для контролю мають бути звичайним текстом до 1000 символів.',
+  'Invalid gear data: toothSurfaceFinish must be bounded plain text.':
+    'Некоректні параметри шестерні: вимоги до шорсткості мають бути звичайним текстом до 400 символів.',
+  'Invalid gear data: heatTreatment must be bounded plain text.':
+    'Некоректні параметри шестерні: вимоги до термообробки мають бути звичайним текстом до 400 символів.',
+  'Invalid gear data: toothEdge must be bounded plain text.':
+    'Некоректні параметри шестерні: обробка кромок має бути описана звичайним текстом до 400 символів.',
   'Manufacturing instructions': 'Інструкції виготовлення',
   'One manufacturing step per line': 'Кожна вимога — з нового рядка',
   'Included on this part drawing, PDF and project archive.':

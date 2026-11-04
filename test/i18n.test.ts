@@ -15,6 +15,35 @@ import { field } from '../src/ui/components';
 
 test.afterEach(() => setLanguage('en'));
 
+test('gear warnings translate each missing field while preserving the measured counts', () => {
+  setLanguage('uk');
+  const missing = translate(
+    'Gear manufacturing data is incomplete: Gear type, Normal module, Normal pressure angle, Profile shift, Basic rack / tooth profile, Accuracy and backlash, Inspection dimensions, Tooth flank finish, Tooth edge treatment. Specify these values before manufacture.',
+  );
+  assert.match(missing, /Тип шестерні, Нормальний модуль, Нормальний кут профілю/);
+  assert.match(missing, /Розміри для контролю/);
+  assert.doesNotMatch(missing, /Gear|Normal|Inspection|Specify/);
+  assert.equal(
+    translate(
+      'Gear tooth count conflicts with measured geometry: specified 25, measured 24. Resolve the mismatch before manufacture.',
+    ),
+    'Кількість зубців не відповідає виміряній геометрії: задано 25, виміряно 24. Усуньте невідповідність перед виготовленням.',
+  );
+  assert.match(
+    translate(
+      'Gear parameter table exceeds the drawing area. Shorten the entered data or choose a larger sheet before export.',
+    ),
+    /більший аркуш/,
+  );
+  setLanguage('en');
+  assert.equal(
+    translate(
+      'Gear manufacturing data is incomplete: Gear type. Specify these values before manufacture.',
+    ),
+    'Gear manufacturing data is incomplete: Gear type. Specify these values before manufacture.',
+  );
+});
+
 test('template messages translate before interpolating counts', () => {
   setLanguage('uk');
   assert.equal(translate('{count} locked', { count: 2 }), 'Заблоковано: 2');
