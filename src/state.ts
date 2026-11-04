@@ -1,4 +1,4 @@
-import type { Dimension, DrawingLayout, DrawingSettings, Part } from './model';
+import type { Dimension, DrawingAnnotation, DrawingLayout, DrawingSettings, Part } from './model';
 import { titleBlockDefaults } from './drawing/title-block-data';
 
 export const defaultSettings: DrawingSettings = {
@@ -13,19 +13,22 @@ export const defaultSettings: DrawingSettings = {
   notes: 'Dimensions in mm.',
 };
 export interface WorkspaceState {
+  description: string;
   parts: Part[];
   selected: Set<string>;
   activeId: string | null;
   dimensions: Record<string, Dimension[]>;
+  annotations: Record<string, DrawingAnnotation[]>;
   layouts: Record<string, DrawingLayout>;
   settings: DrawingSettings;
 }
 export interface DimensionSnapshot {
   dimensions: Dimension[];
+  annotations?: DrawingAnnotation[];
   layout?: DrawingLayout;
 }
 
-/** Dimensions and their sheet layout form one reversible editing operation. */
+/** Dimensions, review annotations and sheet layout form one reversible editing operation. */
 export class DimensionHistory {
   private past: DimensionSnapshot[] = [];
   private future: DimensionSnapshot[] = [];

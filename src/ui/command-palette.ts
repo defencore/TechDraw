@@ -5,6 +5,7 @@ import {
   type CommandId,
 } from './command-registry';
 import { icon } from './icons';
+import { localizeUi } from './i18n';
 
 const searchable = (text: string) =>
   text
@@ -217,6 +218,7 @@ export class CommandPaletteController {
       this.options.push(option);
     }
     this.updateActive();
+    localizeUi(this.dialog!);
   }
 
   private updateActive(): void {

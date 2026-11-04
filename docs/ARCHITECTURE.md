@@ -6,11 +6,14 @@ The application is a static TypeScript/Vite project with a small shared data mod
 
 | Module                                                     | Responsibility                                                                                      |
 | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `src/model.ts`                                             | Serializable types for parts, projections, dimensions, sheet settings and cached view layouts       |
+| `src/model.ts`                                             | Serializable parts, projections, dimensions, paper annotations, sheet settings and view layouts     |
 | `src/measurements.ts`                                      | Orthographic linear and angular measurement rules and geometry validation                           |
 | `src/project.ts`                                           | Versioned project serialization and validation of imported workspace data                           |
+| `src/io/source-repository.ts`                              | Copied original STEP/DXF bytes and stable source IDs, separate from transferred worker inputs       |
+| `src/io/project-archive.ts`                                | Local ZIP creation/opening, source manifests, SHA-256 checks, limits and missing-source records     |
+| `src/io/dxf-import.ts`                                     | Explicit planar ASCII DXF subset, source units, exact circle/bulge metadata and source notes        |
 | `src/cad/client.ts`                                        | Worker lifecycle, request IDs, progress, cancellation and timeout                                   |
-| `src/cad/worker.ts`                                        | Load the bundled WASM kernel and handle import/demo requests                                        |
+| `src/cad/worker.ts`                                        | Load the bundled WASM kernel and handle the single STEP import request path                         |
 | `src/cad/engine.ts`                                        | STEP transfer, unit normalization, solid selection, precise HLR projections and analytic edge data  |
 | `src/cad/step-metadata.ts`                                 | Product names and assembly relationships; never geometric parsing                                   |
 | `src/drawing/dimensions.ts`                                | Automatic geometric dimension suggestions, coverage warnings and numeric labels                     |
@@ -23,6 +26,8 @@ The application is a static TypeScript/Vite project with a small shared data mod
 | `src/drawing/page-layout.ts`                               | Pure paper areas, standard scales, projection bounds, aligned view packing and fit checks           |
 | `src/drawing/layout.ts`                                    | Arrange annotations at each candidate scale and initialize their persistent physical layout         |
 | `src/drawing/render.ts`                                    | Serialize the physical layout, templates, geometry and annotations into an SVG sheet                |
+| `src/drawing/annotations.ts`                               | Paper-space review bounds, vector markup, escaping and appearance-aware rendering                   |
+| `src/drawing/appearance.ts`                                | Paper/Blueprint palettes applied without changing document text or geometric coordinates            |
 | `src/drawing/gost-form1.ts`                                | GOST 2.104-68 Form 1 frame geometry and English/Ukrainian sheet labels                              |
 | `src/drawing/title-block-data.ts`                          | Shared editable document fields, defaults and field keys                                            |
 | `src/drawing/pdf.ts`                                       | Convert the same SVG sheet into correctly sized PDF pages                                           |
@@ -35,6 +40,12 @@ The application is a static TypeScript/Vite project with a small shared data mod
 | `src/ui/drawing-canvas.ts`                                 | Persistent canvas controller for pointer gestures, draft placement, selection and viewport updates  |
 | `src/ui/drawing-toolbar.ts`                                | Compact floating icon dock with tooltips and separate viewport-control dock                         |
 | `src/ui/drawing-feedback.ts`                               | Persistent sheet warnings with layout and page-setup actions                                        |
+| `src/ui/annotation-tools.ts`, `annotation-editor.ts`       | Review-tool creation, paper-space picking/dragging and inline text/graphic editing                  |
+| `src/ui/capture-region.ts`                                 | Exclusive crop gesture and viewport-to-paper rectangle conversion                                   |
+| `src/ui/drawing-image.ts`                                  | Sheet-clipped crop bounds, bounded SVG-to-PNG rasterization and clipboard image writing             |
+| `src/ui/drawing-share.ts`                                  | Prepared image preview with copy, download and capability-checked native sharing                    |
+| `src/ui/screen-awake.ts`                                   | Viewer-only screen wake-lock lifecycle, visibility handling, release and retry states               |
+| `src/ui/i18n.ts`, `i18n-uk.ts`                             | EN/UA presentation, language preference and protected user/SVG text boundaries                      |
 | `src/ui/dimension-editor.ts`                               | Compact selected-dimension panel with tolerance controls and optional position/text settings        |
 | `src/ui/dimension-browser.ts`                              | Pure dimension filtering plus searchable list rendering with visible and hidden-selection counts    |
 | `src/ui/dimension-placement-editor.ts`                     | Group selection, view selection, side actions, alignment mode and paper-spacing controls            |
@@ -48,33 +59,57 @@ The application is a static TypeScript/Vite project with a small shared data mod
 | `src/ui/workspace-preferences.ts`                          | Strict browser persistence of independent grid visibility, snapping and spacing preferences         |
 | `src/ui/tolerance-editor.ts`                               | Tolerance-mode buttons, numeric/sign controls, draft preview and explicit Apply/Clear actions       |
 | `src/ui/tolerance-controller.ts`                           | Per-annotation raw drafts, editor lifecycle, validation, keyboard handling and explicit commits     |
-| `src/ui/title-block-editor.ts`                             | English editor for document data, sign-offs, changes, inventory and technical requirements          |
+| `src/ui/title-block-editor.ts`                             | Localized editor for document data, sign-offs, changes, inventory and technical requirements        |
 | `src/ui/title-block-cache.ts`                              | Whitelisted browser persistence of document fields and selected template                            |
 | `src/ui/views.ts`, `components.ts`, `utils.ts`, `icons.ts` | Workspace views, accessible controls, escaping and icons                                            |
 | `src/style.css`                                            | Responsive layout and both colour themes                                                            |
 | `src/ui/workspace-cad.css`                                 | Contextual browser, selection actions, focus mode, command dialog and menu presentation             |
 | `test/`                                                    | Geometry and drawing regression tests                                                               |
-| `public/examples/`                                         | Real, original STEP test fixtures                                                                   |
+| `public/examples/`                                         | Original CC0 STEP assemblies and a millimetre DXF inspection plate                                  |
 
 ## Data flow
 
-1. A local file becomes a transferable `ArrayBuffer` sent to the CAD worker.
+1. Original local STEP/DXF bytes are copied into `SourceRepository` before processing. Each resulting part receives the source ID; multiple placed STEP solids can reference one original assembly file. STEP input becomes a transferable `ArrayBuffer` sent to the CAD worker. DXF follows the separate planar parser.
 2. The worker loads Open CASCADE from a bundled WASM asset. STEP transfer normalizes length units to millimetres.
 3. Transferred solids retain their world placement. Product definitions are matched to transferred solid geometry when possible; unresolved names and repeated ancestry produce warnings.
 4. The precise HLR algorithm produces hard edges and apparent outlines for four cameras. Smooth tangency boundaries are excluded and coincident strokes are removed. Analytic source circles retain centres, unit axes and radii for shaft recognition. Source vertices provide snap coordinates. Curves are adaptively sampled for display only.
-5. The worker returns plain `ImportResult` data. Open CASCADE handles are disposed inside the worker and do not enter UI state or saved projects.
+5. The worker returns plain `ImportResult` data. Open CASCADE handles are disposed inside the worker and do not enter UI state or saved projects. DXF returns the same serializable result shape with `sourceKind: 'dxf'` and one front source view, without invoking the 3D kernel or fabricating projections.
 6. Automatic dimension rules create editable `Dimension` objects in model units. Balanced suggestions prioritize readability; the full-detail mode includes all recognized baseline coordinates. Refreshing suggestions retains manual measurements and explicit specifications on matched automatic measurements. Dimension lanes arrange nested measurements so shorter dimensions sit closer to the part. Paper offsets and label movement remain independent of drawing scale.
-7. `dimension-geometry.ts` describes physical annotation primitives and bounds. `page-layout.ts` packs views using their contours, captions, centre lines and annotations, with aligned front/top X datums and front/right Y datums. `layout.ts` evaluates annotation packing at each candidate standard scale before SVG serialization. The chosen scale and four view transforms become a cached `DrawingLayout`; the renderer serializes that layout. Manual annotation changes reuse it, so the part does not move or shrink while a dimension is edited. Explicit Auto/Auto layout operations or changes to paper format, orientation, template or drawing scale can regenerate it.
+7. `dimension-geometry.ts` describes physical dimension primitives and bounds. `page-layout.ts` packs STEP views with aligned front/top X datums and front/right Y datums, or a single DXF source view, using their contours, captions, centre lines and annotations. `layout.ts` evaluates annotation packing at each candidate standard scale before SVG serialization. The chosen scale and transforms become a cached `DrawingLayout`; the renderer serializes only actual part views. Manual annotation changes reuse it, so the part does not move or shrink while an annotation is edited. Explicit Auto/Auto layout operations or changes to paper format, orientation, template or drawing scale can regenerate it.
 8. `DrawingCanvas` keeps the interaction element mounted, owns pointer capture and draws temporary feedback separately from committed dimensions. Geometry selection creates a draft; moving and clicking places it. During an existing annotation's drag, only that annotation's SVG is patched. The completed edit commits one history operation.
-9. `WorkspaceDocument` owns dimension commits, per-part histories, layout invalidation, part removal and project replacement. A `DimensionSnapshot` stores dimensions and the optional cached layout together. History clones snapshots, keeps up to 60 operations and clears redo after a new edit. No-op annotation edits do not add snapshots. Undoing Auto/Arrange restores the previous view positions as well as the annotations. UI selection is pruned against the resulting document, independently of snapshot data.
-10. Project files persist cached layouts, and PDF export passes the same layout to the shared renderer. Exported sheets therefore preserve the preview's committed geometry and dimension positions. Viewport zoom and pan are display state and do not affect the drawing or exported PDF.
+9. `WorkspaceDocument` owns dimension and review-annotation commits, per-part histories, layout invalidation, part removal and project replacement. A `DimensionSnapshot` stores dimensions, review annotations and the optional cached layout together. History clones snapshots, keeps up to 60 operations and clears redo after a new edit. No-op annotation edits do not add snapshots. Undoing Auto/Arrange restores the previous view positions as well as the annotations. UI selection is pruned against the resulting document, independently of snapshot data.
+10. Local project archives persist the validated drawing JSON, cached layouts, description and available original source files. PDF/SVG/image export calls the shared renderer with committed review annotations and an explicit appearance. Viewport zoom and pan are display state and do not affect physical drawing geometry or PDF paper size.
 11. Editable title-block fields have a separate browser cache. Their shared field list comes from `title-block-data.ts`; the editor, project parser and cache use the same keys. Entries and the selected template are restored on reload and reused when new parts are imported. **Clear** resets document fields and removes the stored cache. Model files and geometry never enter this cache.
 
 ## Sheet templates and document data
 
-`eskd` and `eskd-uk` select English or Ukrainian Form 1 frame labels, while the application controls remain English. `gost-form1.ts` owns the 185 × 55 mm title block and additional frame fields; it does not own part geometry or dimension placement. See [the verified standard reference and scope](ENGINEERING.md#gost-2104-68-frame-templates). A4 GOST sheets use portrait orientation, with the title block along the short edge.
+`eskd` and `eskd-uk` select English or Ukrainian Form 1 frame labels independently of the EN/UA interface language. `gost-form1.ts` owns the 185 × 55 mm title block and additional frame fields; it does not own part geometry or dimension placement. See [the verified standard reference and scope](ENGINEERING.md#gost-2104-68-frame-templates). A4 GOST sheets use portrait orientation, with the title block along the short edge.
 
 The title-block cache uses `techdraw:title-block` in local storage. It includes document values such as title, designation, material, organization, sign-offs, change records, inventory information and notes, plus the selected template. It excludes STEP bytes, parts, dimensions, view layouts, viewport position, paper format and drawing scale. Project files remain the explicit way to retain the editable drawing workspace. If browser storage is unavailable, current-session editing remains usable.
+
+## Source files and local project archives
+
+`Part.sourceId` associates geometry with one original file. `SourceRepository.add` copies the bytes, so transferring the CAD input buffer cannot detach the stored original. Reads return independent copies. This repository is session data; it is not written to the title-block cache or uploaded.
+
+The default `.techdraw.zip` contains validated `project.json`, a versioned `manifest.json`, `README.txt` and referenced originals under `sources/<source-id>/`. The project JSON stores parts, dimensions, structured tolerances, review annotations, layouts, selected export parts, settings and `description`. The description is document data separate from printed technical notes. The manifest records original filenames, kinds, SHA-256 digests, sizes and part associations. Originals are included byte-for-byte; unreferenced repository entries are excluded. Parts without available source bytes are listed explicitly in `missingSources`.
+
+Opening preflights every ZIP entry before decompression, rejects unsafe/duplicate paths and unsupported compression, and enforces resource limits. Expanded project JSON and sources are then checked against the manifest and passed through the same project whitelist before replacing the workspace. Limits are 128 MB compressed, 256 MB expanded, 100 MB project JSON and 64 MB per source. `.techdraw.json` remains an explicitly supported validated drawing-data format; it contains no embedded originals. Saving a JSON-origin workspace to ZIP preserves its drawing data and reports unavailable originals instead of synthesizing CAD files.
+
+The DXF parser accepts ASCII `LINE`, `CIRCLE`, `ARC`, `LWPOLYLINE` and classic 2D `POLYLINE` with analytic bulge arcs. `$INSUNITS` or an explicit mm/cm/m/in/ft override determines conversion to millimetres. Unitless files assume mm with a notice; unsupported declared units require an override. Source circles, arc lengths and straight-edge endpoints remain analytic, while display tessellation has a 0.005 mm chord-error budget. The sole front projection represents the source XY drawing in the model's XZ convention; the zero second extent is not an inferred thickness.
+
+Visible unsupported essential entities, nonplanar coordinates, nonstandard extrusion, entity thickness, wide polylines and fitted/3D/mesh polylines fail explicitly. Hidden/frozen-layer, invisible and paper-space entities are omitted with a notice. TEXT/MTEXT becomes source-note text; original placement, style and all original bytes remain in the source. Never interpret an unsupported entity as a line or silently infer a 3D solid. SVG output does not imply SVG model import support.
+
+## Review markup and presentation
+
+`DrawingAnnotation` is a paper-millimetre object with kind `text`, `arrow`, `rectangle`, `ellipse` or `freehand`, an ID, finite points, stroke width and optional text/font size. Annotation arrays are keyed by part ID. They are independent of model anchors and nominal dimension values. The shared renderer and picking helpers use their complete physical bounds; edits participate in the same per-part history as dimensions. Serialization validates kinds, point counts, text, sizes and references before rendering.
+
+`renderDrawing` accepts `{annotations, appearance}` as explicit options. Paper and Blueprint alter paint only; the layout, dimensions and document text remain identical. Screen appearance can follow the interface theme, while export and image dialogs choose their own appearance. Review marks are included in SVG, vector PDF and PNG output. Workspace grids, selection overlays and controls are excluded.
+
+`CaptureRegionController` owns a separate capture-phase gesture so cropping cannot also pan the sheet or drag an annotation. It converts the crop from viewport pixels through the SVG transform into paper coordinates. `drawing-image.ts` intersects crop/visible/selection bounds with the actual sheet and rasterizes the rendered SVG at bounded resolution. `DrawingShareController` prepares the image before enabling actions, retains a preview URL only while needed, and calls clipboard/native-share APIs from the user's click. Clipboard writing can be unavailable or denied; PNG download remains available. Native file sharing is offered only when `navigator.canShare` accepts the image file.
+
+The workshop viewer disables document editing, hides editing controls and retains part selection, navigation, appearance and image sharing. Native fullscreen is requested when the browser permits it; browser-filling viewing remains usable otherwise. `ScreenAwakeController` requests a screen wake lock only while that viewer is active, enabled and visible. Visibility changes, exit, asynchronous request races and platform release are handled explicitly. A denied or unsupported lock is a reported capability state, never a promise that the operating system cannot sleep.
+
+`i18n.ts` owns English source messages and Ukrainian presentation through the `uk` locale; the visible switch is EN/UA and its independent preference key is `techdraw:language`. Localized command labels keep stable command IDs. HTML localization skips SVG, inputs, editable fields and marked user content, including imported names, description text and notes. Drawing frame language is a template choice, not an effect of the interface locale.
 
 ## Canvas coordinates and controls
 
@@ -110,7 +145,7 @@ The tolerance editor uses visible mode buttons. Symmetric magnitude has a fixed 
 
 ## Contract invariants
 
-- A `Part` uses millimetres and contains `front`, `top`, `right` and `iso` projections.
+- A STEP `Part` uses millimetres and contains `front`, `top`, `right` and `iso` projections. A DXF `Part` has `sourceKind: 'dxf'` and exactly one authoritative `front` source projection.
 - Projection coordinates use a Cartesian Y-up convention. The renderer handles conversion to SVG Y-down coordinates.
 - Model measurements never depend on viewport zoom or CSS pixels.
 - Tolerance annotations never replace the measured nominal value. Validate committed deviations and fit designations before rendering or saving them; preserve draft text only in the editor.
@@ -118,10 +153,10 @@ The tolerance editor uses visible mode buttons. Symmetric magnitude has a fixed 
 - Isometric views are illustrative; dimension tools operate in orthographic views.
 - A source edge's sampled display length must not substitute for an analytic dimension value.
 - Sheet dimensions and PDF dimensions use millimetres at the selected paper size.
-- Imported names, project text, title fields and notes must be escaped before SVG or HTML output.
+- Imported names, project text, title fields and notes must be escaped before SVG or HTML output. Invalid XML controls and lone Unicode surrogates cannot enter validated project text. Interface translation must not rewrite user content or drawing text.
 - Project loading must validate data before replacing the workspace, including finite bounded coordinates, unique identifiers, selected-part references, supported settings and agreement between dimension values and their measurement geometry. Saved layouts require four finite transforms with a common positive scale and a known part ID. Projects without layout metadata receive a layout when first displayed.
 - Cancellation terminates synchronous WASM work by terminating the worker. The next import creates a new worker.
-- Source model data must not be sent over a network by application code.
+- Source model data must not be sent over a network by application code. User-requested image sharing delegates only the prepared drawing image to the platform share UI.
 
 ## Extending the application
 
@@ -133,12 +168,14 @@ For a new editable document field, add its default and key to `title-block-data.
 
 For improved STEP metadata, extend `step-metadata.ts` and the transfer matching logic without replacing the kernel's geometry parser. Add a real STEP fixture for nested or repeated assembly cases. Do not assign product names to solids by ordinal coincidence.
 
+For another source format, introduce an explicit parser and source kind with documented units and dimensionality. Retain its original bytes through `SourceRepository`, extend validated project/archive contracts, and add exact geometry and unsupported-entity tests. Do not make an imported 2D drawing satisfy a four-view contract by duplicating or inventing geometry.
+
 For section views, semantic PMI, datum systems, thread recognition or geometric tolerances, introduce explicit data types and UI workflows. Geometry alone must not silently create manufacturing requirements.
 
 ## Verification
 
 Run `npm test` and `npm run build` after a change. Add a regression test when the change affects measurements, source units, projection conventions, assembly placement or paper layout. For low-impact copy or style changes, use a focused browser review.
 
-For interaction or PDF changes, inspect the browser and an exported PDF. Test at least one small and one large sheet and both orientations. Compare actual PDF page dimensions and numeric measurements independently of the preview.
+For interaction or PDF changes, inspect the browser and an exported PDF. Test at least one small and one large sheet and both orientations. Compare actual PDF page dimensions and numeric measurements independently of the preview. For archive changes, reopen a file and compare original source bytes, annotations, description and measured values. Clipboard, native sharing, fullscreen and screen wake lock require browser/device capability review as well as pure lifecycle tests.
 
 Keep code and comments in English. Keep modules explicit and avoid compatibility branches for formats or APIs that are not supported by the product.

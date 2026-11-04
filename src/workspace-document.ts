@@ -1,4 +1,4 @@
-import type { Dimension, DrawingLayout, Part } from './model';
+import type { Dimension, DrawingAnnotation, DrawingLayout, Part } from './model';
 import { autoDimensions } from './drawing/dimensions';
 import { initializeDrawing } from './drawing/layout';
 import type { ProjectData } from './project';
@@ -17,6 +17,9 @@ export class WorkspaceDocument {
   }
   get dimensions(): Dimension[] {
     return this.state.activeId ? (this.state.dimensions[this.state.activeId] ?? []) : [];
+  }
+  get annotations(): DrawingAnnotation[] {
+    return this.state.activeId ? (this.state.annotations[this.state.activeId] ?? []) : [];
   }
   get history(): DimensionHistory | undefined {
     const id = this.state.activeId;
@@ -57,14 +60,24 @@ export class WorkspaceDocument {
     this.state.parts.push(part);
     this.state.selected.add(part.id);
     this.state.dimensions[part.id] = autoDimensions(part);
+    this.state.annotations[part.id] = [];
     this.pendingArrangement.add(part.id);
   }
 
   checkpoint(): void {
     this.history?.record({
       dimensions: this.dimensions,
+      annotations: this.annotations,
       layout: this.state.layouts[this.state.activeId!],
     });
+  }
+
+  changeAnnotations(next: DrawingAnnotation[]): boolean {
+    const id = this.state.activeId;
+    if (!id || JSON.stringify(next) === JSON.stringify(this.annotations)) return false;
+    this.checkpoint();
+    this.state.annotations[id] = structuredClone(next);
+    return true;
   }
 
   changeDimensions(
@@ -86,11 +99,16 @@ export class WorkspaceDocument {
   travel(direction: 'undo' | 'redo'): boolean {
     const id = this.state.activeId;
     if (!id) return false;
-    const current = { dimensions: this.dimensions, layout: this.state.layouts[id] };
+    const current = {
+      dimensions: this.dimensions,
+      annotations: this.annotations,
+      layout: this.state.layouts[id],
+    };
     const result = this.history?.[direction](current);
     if (!result) return false;
     this.pendingArrangement.delete(id);
     this.state.dimensions[id] = result.dimensions;
+    this.state.annotations[id] = result.annotations ?? [];
     if (result.layout) this.state.layouts[id] = result.layout;
     else delete this.state.layouts[id];
     return true;
@@ -100,6 +118,7 @@ export class WorkspaceDocument {
     this.state.parts = this.state.parts.filter((part) => part.id !== id);
     this.state.selected.delete(id);
     delete this.state.dimensions[id];
+    delete this.state.annotations[id];
     delete this.state.layouts[id];
     this.pendingArrangement.delete(id);
     this.histories.delete(id);
@@ -107,8 +126,10 @@ export class WorkspaceDocument {
   }
 
   replace(project: ProjectData): void {
+    this.state.description = project.description;
     this.state.parts = project.parts;
     this.state.dimensions = project.dimensions;
+    this.state.annotations = project.annotations;
     this.state.layouts = project.layouts;
     this.state.settings = project.settings;
     this.state.selected = new Set(project.selected);

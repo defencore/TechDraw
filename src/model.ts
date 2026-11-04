@@ -30,6 +30,9 @@ export interface Part {
   id: string;
   name: string;
   sourceName: string;
+  sourceKind?: 'step' | 'dxf';
+  sourceId?: string;
+  sourceNotes?: string[];
   path: string[];
   unit: 'mm';
   bounds: { min: Point3; max: Point3 };
@@ -122,6 +125,14 @@ export interface DrawingSettings {
 export interface DrawingLayout {
   scale: number;
   viewTransforms: Record<ViewId, { x: number; y: number; scale: number }>;
+}
+export interface DrawingAnnotation {
+  id: string;
+  kind: 'text' | 'arrow' | 'rectangle' | 'ellipse' | 'freehand';
+  points: Point2[];
+  text?: string;
+  strokeWidth: number;
+  fontSize?: number;
 }
 export interface PartDrawing {
   partId: string;

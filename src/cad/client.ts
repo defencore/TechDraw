@@ -2,7 +2,7 @@ import type { ImportResult } from '../model';
 
 export interface CadClient {
   importStep(buffer: ArrayBuffer, name: string): Promise<ImportResult>;
-  demo(): Promise<ImportResult>;
+  demo(): Promise<ImportResult & { sourceBytes: Uint8Array }>;
   reset(): void;
   dispose(): void;
 }
@@ -77,7 +77,7 @@ export function createCadClient(onProgress: (message: string) => void = () => {}
       active.postMessage({ id, buffer, name }, [buffer]);
     });
   };
-  const demo = async (): Promise<ImportResult> => {
+  const demo = async (): Promise<ImportResult & { sourceBytes: Uint8Array }> => {
     if (requests.size || exampleFetch)
       throw new Error('Wait for the current import or cancel it before starting another.');
     const operation = { controller: new AbortController(), message: 'Import cancelled.' };
@@ -111,7 +111,8 @@ export function createCadClient(onProgress: (message: string) => void = () => {}
       if (exampleFetch === operation) exampleFetch = undefined;
     }
     // Examples and user files share one worker import protocol and geometry path.
-    return request(buffer, 'mounting-kit.step');
+    const sourceBytes = new Uint8Array(buffer).slice();
+    return { ...(await request(buffer, 'mounting-kit.step')), sourceBytes };
   };
   return {
     importStep: request,

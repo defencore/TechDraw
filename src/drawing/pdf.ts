@@ -2,12 +2,16 @@ import { jsPDF } from 'jspdf';
 import 'svg2pdf.js';
 import type { Dimension, DrawingLayout, DrawingSettings, Part } from '../model';
 import { renderDrawing } from './render';
+import type { DrawingAnnotation } from '../model';
+import type { DrawingAppearance } from './appearance';
 
 export interface PdfPage {
   part: Part;
   dimensions: Dimension[];
   settings: DrawingSettings;
   layout?: DrawingLayout;
+  annotations?: DrawingAnnotation[];
+  appearance?: DrawingAppearance;
 }
 
 let fontData: Promise<string> | undefined;
@@ -61,7 +65,10 @@ function applyPdfFont(pdf: jsPDF, svg: SVGSVGElement): void {
 export async function exportPdf(pages: PdfPage[], filename = 'techdraw.pdf'): Promise<void> {
   if (!pages.length) throw new Error('Select at least one part to export.');
   const rendered = pages.map((p) =>
-    renderDrawing(p.part, p.dimensions, p.settings, undefined, p.layout),
+    renderDrawing(p.part, p.dimensions, p.settings, undefined, p.layout, {
+      annotations: p.annotations,
+      appearance: p.appearance,
+    }),
   );
   if (rendered.some((p) => p.warnings.some((w) => w.startsWith('GOST 2.104-68 requires A4'))))
     throw new Error(
@@ -74,7 +81,10 @@ export async function exportPdf(pages: PdfPage[], filename = 'techdraw.pdf'): Pr
   if (
     rendered.some((p) =>
       p.warnings.some(
-        (w) => w.startsWith('The selected scale') || w.startsWith('Dimensions exceed'),
+        (w) =>
+          w.startsWith('The selected scale') ||
+          w.startsWith('Dimensions exceed') ||
+          w.startsWith('Review annotations exceed'),
       ),
     )
   )

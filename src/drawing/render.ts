@@ -1,4 +1,15 @@
-import type { Dimension, DrawingSettings, Part, Point2, Projection, ViewId } from '../model';
+import type {
+  Dimension,
+  DrawingAnnotation,
+  DrawingSettings,
+  Part,
+  Point2,
+  Projection,
+  ViewId,
+} from '../model';
+import { annotationBounds, renderAnnotations } from './annotations';
+import { applyDrawingAppearance, type DrawingAppearance } from './appearance';
+export type { DrawingAppearance } from './appearance';
 import { autoDimensionWarnings } from './dimensions';
 import { dimensionGeometry, toPaper, type ViewTransform } from './dimension-geometry';
 import {
@@ -20,6 +31,10 @@ export interface RenderedDrawing {
   viewTransforms: Record<ViewId, ViewTransform>;
   warnings: string[];
 }
+export interface DrawingRenderOptions {
+  appearance?: DrawingAppearance;
+  annotations?: readonly DrawingAnnotation[];
+}
 
 export const escapeXml = (value: unknown): string =>
   String(value ?? '').replace(
@@ -39,6 +54,7 @@ export function renderDimension(
   t: ViewTransform,
   precision: number,
   selected: boolean,
+  appearance: DrawingAppearance = 'paper',
 ): string {
   const geometry = dimensionGeometry(d, t, precision);
   const color = selected ? '#16745e' : '#20262b';
@@ -69,7 +85,10 @@ export function renderDimension(
     )
     .join('');
   content += `<g class="dimension-label" data-dimension-grip="label" aria-label="${escapeXml(data.plainText)}"${angle ? ` transform="rotate(${angle} ${n(x)} ${n(y)})"` : ''}><rect x="${n(x + data.bounds.minX)}" y="${n(y + data.bounds.minY)}" width="${n(data.width)}" height="${n(data.height)}" fill="white" stroke="none"/>${runs}</g>`;
-  return `<g class="dimension${selected ? ' selected' : ''}" data-dimension-id="${escapeXml(d.id)}" data-view-id="${d.viewId}" fill="none" stroke="${color}" stroke-width="${selected ? 0.4 : 0.18}" style="cursor:move">${content}</g>`;
+  return applyDrawingAppearance(
+    `<g class="dimension${selected ? ' selected' : ''}" data-dimension-id="${escapeXml(d.id)}" data-view-id="${d.viewId}" fill="none" stroke="${color}" stroke-width="${selected ? 0.4 : 0.18}" style="cursor:move">${content}</g>`,
+    appearance,
+  );
 }
 
 function projectionMarkup(view: Projection, t: ViewTransform, settings: DrawingSettings): string {
@@ -178,6 +197,7 @@ export function renderDrawing(
   settings: DrawingSettings,
   selectedDimensionId?: string,
   layoutOverride?: Pick<RenderedDrawing, 'scale' | 'viewTransforms'>,
+  options: DrawingRenderOptions = {},
 ): RenderedDrawing {
   const page = drawingPage(settings);
   const { width, height, left, right, top, bottom, blockHeight } = page;
@@ -192,6 +212,13 @@ export function renderDrawing(
     ? drawingLayoutFits(part, dimensions, settings, layoutOverride)
     : calculated!.fits;
   const warnings: string[] = autoDimensionWarnings(part, dimensions);
+  if (
+    options.annotations?.some((annotation) => {
+      const bounds = annotationBounds(annotation);
+      return bounds.minX < 0 || bounds.minY < 0 || bounds.maxX > width || bounds.maxY > height;
+    })
+  )
+    warnings.push('Review annotations exceed the paper. Move them inside the sheet before export.');
   if (!fits)
     warnings.push(
       layoutOverride || settings.scale === 'auto'
@@ -368,5 +395,13 @@ export function renderDrawing(
     ? ''
     : `<g stroke="none">${text(left + 3, top + 5, `${templateName} · ${part.sourceName}`.slice(0, 100), 2.2, 'fill="#7a838a"')}${text(width - right - 3, top + 5, 'GEOMETRIC DRAFT · REVIEW REQUIRED', 2.2, 'text-anchor="end" fill="#7a838a"')}</g>`;
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}mm" height="${height}mm" viewBox="0 0 ${width} ${height}" role="img" aria-label="Technical drawing of ${escapeXml(part.name)}" style="font-family:Arial,Helvetica,sans-serif;background:white;color:#20262b"><defs><clipPath id="sheet-content"><rect x="${clipLeft}" y="${clipTop}" width="${clipRight - clipLeft}" height="${clipBottom - clipTop}"/></clipPath></defs><rect width="${width}" height="${height}" fill="white"/><g fill="#20262b" stroke="#20262b"><rect x="${left}" y="${top}" width="${width - left - right}" height="${height - top - bottom}" fill="none" stroke-width=".5"/>${header}<g clip-path="url(#sheet-content)" stroke="none">${views}</g><g stroke="none">${noteMarkup}</g>${titleBlock}</g></svg>`;
-  return { svg, width, height, scale, viewTransforms: transforms, warnings };
+  const annotated = svg.replace('</svg>', `${renderAnnotations(options.annotations ?? [])}</svg>`);
+  return {
+    svg: applyDrawingAppearance(annotated, options.appearance),
+    width,
+    height,
+    scale,
+    viewTransforms: transforms,
+    warnings,
+  };
 }

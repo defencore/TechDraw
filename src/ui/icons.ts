@@ -1,4 +1,13 @@
 const paths: Record<string, string> = {
+  copy: '<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/>',
+  github:
+    '<path d="M9 19c-4.3 1.3-4.3-2-6-2.5M15 22v-3.5c0-1 .1-1.5-.5-2 3.2-.4 6.5-1.6 6.5-7a5.4 5.4 0 0 0-1.5-3.7c.2-.5.6-1.8-.1-3.6 0 0-1.2-.4-3.8 1.4a13 13 0 0 0-7 0C6 1.8 4.8 2.2 4.8 2.2c-.7 1.8-.3 3.1-.1 3.6A5.4 5.4 0 0 0 3.2 9.5c0 5.4 3.3 6.6 6.5 7-.5.4-.7 1.1-.7 2V22"/>',
+  share: '<path d="M12 16V3m-4 4 4-4 4 4M5 12v8h14v-8"/>',
+  crop: '<path d="M7 3v14h14M3 7h14v14"/>',
+  text: '<path d="M4 5h16M12 5v15m-4 0h8M4 8V5m16 3V5"/>',
+  rectangle: '<rect x="4" y="5" width="16" height="14" rx="1"/>',
+  ellipse: '<ellipse cx="12" cy="12" rx="9" ry="6"/>',
+  freehand: '<path d="M3 17c4-12 5-14 7-11s-5 13-1 13 5-13 7-12-3 8 0 8 3-4 5-3"/>',
   search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/>',
   boxSelect: '<path d="M9 4H4v5m11-5h5v5M4 15v5h5m11-5v5h-5M4 12h1m7-8v1m7 7h1m-8 7v1"/>',
   expand: '<path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5M3 3l6 6m12-6-6 6M3 21l6-6m12 6-6-6"/>',

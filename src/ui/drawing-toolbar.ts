@@ -10,6 +10,7 @@ interface ToolbarContext {
   canRedo: boolean;
   zoomOptions: string;
   grid: GridSettings;
+  mode?: 'dimensions' | 'annotations';
 }
 
 export function renderWorkspaceControls({
@@ -19,6 +20,7 @@ export function renderWorkspaceControls({
   canRedo,
   zoomOptions,
   grid,
+  mode = 'dimensions',
 }: ToolbarContext): string {
   const control = (
     action: string,
@@ -43,7 +45,23 @@ export function renderWorkspaceControls({
   return `<div class="workspace-dock" role="toolbar" aria-label="Drawing tools">
     <div class="dock-group navigation-tools" role="group" aria-label="Navigation">${control('tool:select', 'Select and move dimensions', 'pointer', { selected: tool === 'select', shortcut: 'Escape', keyHint: 'Esc' })}${control('tool:box-select', 'Box select dimensions', 'boxSelect', { selected: tool === 'box-select', shortcut: 'B' })}${control('tool:pan', 'Pan drawing', 'hand', { selected: tool === 'pan', shortcut: 'P' })}</div>
     ${divider}
-    <div class="dock-group dimension-tools" role="group" aria-label="Add dimensions">${dimensionTools.map(({ id, label, icon, shortcut }) => control(`tool:${id}`, label, icon, { shortcut, selected: tool === id, dimension: true })).join('')}</div>
+    ${
+      mode === 'annotations'
+        ? `<div class="dock-group dimension-tools annotation-tools" role="group" aria-label="Markup">${(
+            [
+              ['text', 'Add text', 'text'],
+              ['arrow', 'Add arrow', 'arrow'],
+              ['rectangle', 'Add rectangle', 'rectangle'],
+              ['ellipse', 'Add ellipse', 'ellipse'],
+              ['freehand', 'Draw freehand', 'freehand'],
+            ] as const
+          )
+            .map(([id, label, glyph]) =>
+              control(`tool:${id}`, label, glyph, { selected: tool === id }),
+            )
+            .join('')}</div>`
+        : `<div class="dock-group dimension-tools" role="group" aria-label="Add dimensions">${dimensionTools.map(({ id, label, icon, shortcut }) => control(`tool:${id}`, label, icon, { shortcut, selected: tool === id, dimension: true })).join('')}</div>`
+    }
     ${divider}
     <div class="dock-group automatic-tools" role="group" aria-label="Automatic dimensions">${control('auto-dimensions', 'Refresh automatic suggestions', 'magic')}${control('arrange-dimensions', 'Auto layout', 'layers')}</div>
     ${divider}

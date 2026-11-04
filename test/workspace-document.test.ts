@@ -6,10 +6,12 @@ import { WorkspaceDocument } from '../src/workspace-document';
 
 function fixture() {
   const state: WorkspaceState = {
+    description: '',
     parts: [],
     selected: new Set(),
     activeId: null,
     dimensions: {},
+    annotations: {},
     layouts: {},
     settings: { ...defaultSettings, scale: 1 },
   };
@@ -93,8 +95,10 @@ test('opening a project retains its exact layouts and resets document history', 
   saved.viewTransforms.front.x += 13;
   document.changeDimensions(document.dimensions.map((d) => ({ ...d, offset: 20 })));
   document.replace({
+    description: '',
     parts: [part],
     dimensions: structuredClone(state.dimensions),
+    annotations: structuredClone(state.annotations),
     layouts: { part: saved },
     settings: { ...state.settings },
     selected: ['part'],
@@ -113,5 +117,35 @@ test('removing a part clears its geometry, selection, layout and history ownersh
   assert.equal(document.history, undefined);
   assert.deepEqual(state.dimensions, {});
   assert.deepEqual(state.layouts, {});
+  assert.deepEqual(state.annotations, {});
   assert.equal(state.selected.size, 0);
+});
+
+test('review notes and graphics share undo history with dimensions without changing frozen view geometry', () => {
+  const { document, part, dimension } = fixture();
+  const layout = structuredClone(document.layout(part));
+  const note = {
+    id: 'note',
+    kind: 'text' as const,
+    points: [[20, 30] as [number, number]],
+    text: 'Review fit',
+    fontSize: 3.5,
+    strokeWidth: 0.35,
+  };
+  assert.equal(document.changeAnnotations([note]), true);
+  note.points[0][0] = 99;
+  assert.equal(document.annotations[0].points[0][0], 20);
+  document.changeDimensions([{ ...dimension, offset: 25 }]);
+  assert.equal(document.travel('undo'), true);
+  assert.equal(document.annotations.length, 1);
+  assert.equal(document.dimensions[0].offset, 10);
+  assert.equal(document.travel('undo'), true);
+  assert.equal(document.annotations.length, 0);
+  assert.equal(document.travel('redo'), true);
+  assert.equal(document.annotations[0].text, 'Review fit');
+  assert.deepEqual(document.layout(part), layout);
+  assert.equal(document.changeAnnotations(structuredClone(document.annotations)), false);
+  assert.equal(document.changeAnnotations([]), true);
+  assert.equal(document.travel('undo'), true);
+  assert.equal(document.annotations[0].points[0][0], 20);
 });

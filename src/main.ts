@@ -1,5 +1,7 @@
 import './style.css';
 import './ui/workspace-cad.css';
+import './ui/drawing-share.css';
+import './ui/viewer.css';
 import { createCadClient } from './cad/client';
 import { refreshDimensionSuggestions } from './drawing/suggestions';
 import { renderDrawingFeedback } from './ui/drawing-feedback';
@@ -31,7 +33,7 @@ import {
 } from './ui/title-block-cache';
 import { renderDrawing } from './drawing/render';
 import { DrawingCanvas, type CanvasTool } from './ui/drawing-canvas';
-import { parseProject, serializeProject } from './project';
+import { parseProject } from './project';
 import type { Dimension, DrawingSettings } from './model';
 import { defaultSettings, type WorkspaceState } from './state';
 import { WorkspaceDocument } from './workspace-document';
@@ -40,6 +42,27 @@ import { icon } from './ui/icons';
 import { button, option } from './ui/components';
 import { createWorkspaceViews } from './ui/views';
 import { downloadBlob, escapeHtml as e, readPreference, savePreference } from './ui/utils';
+import {
+  readLanguage,
+  setLanguage,
+  localizeUi,
+  renderLanguageControl,
+  renderProjectLink,
+  t,
+} from './ui/i18n';
+import { DrawingShareController } from './ui/drawing-share';
+import { CaptureRegionController } from './ui/capture-region';
+import { browserScreenAwake } from './ui/screen-awake';
+import type { DrawingAppearance } from './drawing/appearance';
+import type { DrawingAnnotation } from './model';
+import {
+  renderAnnotationEditor,
+  readAnnotationEdit,
+  readAnnotationOptions,
+} from './ui/annotation-editor';
+import { SourceRepository } from './io/source-repository';
+import { createProjectArchive, openProjectArchive } from './io/project-archive';
+import { importDxf, type DxfUnit } from './io/dxf-import';
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
 const titleBlockStorage = (() => {
@@ -54,10 +77,14 @@ const state: WorkspaceState = {
   selected: new Set(),
   activeId: null,
   dimensions: {},
+  annotations: {},
+  description: '',
   layouts: {},
   settings: { ...defaultSettings, ...readTitleBlockCache(titleBlockStorage) },
 };
+setLanguage(readLanguage(titleBlockStorage), titleBlockStorage);
 const workspaceDocument = new WorkspaceDocument(state);
+const sources = new SourceRepository();
 let titleBlockCached = saveTitleBlockCache(titleBlockStorage, state.settings);
 let theme = readPreference<string>(
   'theme',
@@ -80,6 +107,14 @@ let toastTimer: ReturnType<typeof setTimeout>;
 let rendered: ReturnType<typeof renderDrawing> | undefined;
 let helpOpen = false;
 let focusMode = false;
+let viewerMode = false;
+let nativeViewerFullscreen = false;
+let viewerGeneration = 0;
+let selectedAnnotation: string | undefined;
+let drawingAppearance: 'auto' | DrawingAppearance = 'auto';
+let exportAppearance: DrawingAppearance = 'paper';
+let dxfUnit: DxfUnit | undefined;
+const annotationOptions = { text: '', fontSize: 3.5, strokeWidth: 0.5 };
 const dimensionFilter = { ...defaultDimensionFilter };
 const cad = createCadClient((message: string) => {
   progress = message;
@@ -87,6 +122,10 @@ const cad = createCadClient((message: string) => {
 });
 const active = () => workspaceDocument.active;
 const dims = () => workspaceDocument.dimensions;
+const annotations = () => (state.activeId ? (state.annotations[state.activeId] ?? []) : []);
+const screenAppearance = (): DrawingAppearance =>
+  drawingAppearance === 'auto' ? (theme === 'dark' ? 'blueprint' : 'paper') : drawingAppearance;
+const screenAwake = browserScreenAwake(() => updateViewerStatus());
 const toleranceEditor = new ToleranceEditorController({
   getSelection() {
     const dimension = dims().find((item) => item.id === dimensionSelection.focus);
@@ -107,12 +146,33 @@ const toleranceEditor = new ToleranceEditorController({
 });
 
 const drawingCanvas = new DrawingCanvas({
+  selectAnnotation(id) {
+    selectedAnnotation = id;
+    if (id) {
+      dimensionSelection.clear();
+      inspectorTab = 'annotations';
+    }
+    refreshInspector();
+    renderPaper();
+  },
+  addAnnotation(annotation) {
+    changeAnnotations([...annotations(), annotation]);
+    selectedAnnotation = annotation.id;
+    tool = 'select';
+    inspectorTab = 'annotations';
+    render();
+  },
+  editAnnotation(annotation) {
+    changeAnnotations(annotations().map((item) => (item.id === annotation.id ? annotation : item)));
+  },
   select(id, additive = false) {
+    selectedAnnotation = undefined;
     dimensionSelection.select(id, additive);
     inspectorTab = 'dimensions';
     refreshInspector();
   },
   selectMany(ids, additive) {
+    selectedAnnotation = undefined;
     dimensionSelection.replace(additive ? [...dimensionSelection.ids, ...ids] : ids);
     setTool('select');
     inspectorTab = 'dimensions';
@@ -124,28 +184,40 @@ const drawingCanvas = new DrawingCanvas({
     contextMenu.open(
       clientX,
       clientY,
-      selected
+      selectedAnnotation
         ? [
             'edit-dimension',
             'fit-selection',
-            'place-dimensions:left',
-            'place-dimensions:right',
-            'place-dimensions:top',
-            'place-dimensions:bottom',
-            'clear-dimension-selection',
+            'share-drawing',
             'delete-selected-dimensions',
             'command-palette',
           ]
-        : [
-            'tool:select',
-            'tool:box-select',
-            'tool:horizontal',
-            'tool:vertical',
-            'tool:diameter',
-            'fit',
-            'command-palette',
-          ],
-      selected ? `${dimensionSelection.ids.size} selected` : 'Drawing actions',
+        : selected
+          ? [
+              'edit-dimension',
+              'fit-selection',
+              'place-dimensions:left',
+              'place-dimensions:right',
+              'place-dimensions:top',
+              'place-dimensions:bottom',
+              'clear-dimension-selection',
+              'delete-selected-dimensions',
+              'command-palette',
+            ]
+          : [
+              'tool:select',
+              'tool:box-select',
+              'tool:horizontal',
+              'tool:vertical',
+              'tool:diameter',
+              'fit',
+              'command-palette',
+            ],
+      selectedAnnotation
+        ? 'Annotation actions'
+        : selected
+          ? `${dimensionSelection.ids.size} selected`
+          : 'Drawing actions',
     );
   },
   add: addDimension,
@@ -175,10 +247,39 @@ const drawingCanvas = new DrawingCanvas({
       ? `${label ? `${label} · ` : ''}${message}`
       : 'Drop STEP files anywhere in the workspace';
     const hint = document.querySelector('#tool-hint');
-    if (hint) hint.textContent = canvasHint;
+    if (hint) hint.textContent = t(canvasHint);
   },
   error: toast,
 });
+const imageShare = new DrawingShareController({
+  drawing(appearance) {
+    const part = active();
+    if (!part) return;
+    return {
+      ...renderDrawing(part, dims(), state.settings, undefined, workspaceDocument.layout(part), {
+        annotations: annotations(),
+        appearance,
+      }),
+      name: part.name,
+    };
+  },
+  visible: () => drawingCanvas.getVisiblePaperBounds(),
+  selection: () => drawingCanvas.getSelectionPaperBounds(),
+  capture: startCapture,
+  report: toast,
+});
+const captureRegion = new CaptureRegionController(
+  (bounds) => {
+    app.querySelector('.capture-cancel')?.remove();
+    drawingCanvas.setEnabled(!busy && !helpOpen);
+    imageShare.open(screenAppearance(), bounds);
+  },
+  () => {
+    app.querySelector('.capture-cancel')?.remove();
+    drawingCanvas.setEnabled(!busy && !helpOpen);
+    renderPaper();
+  },
+);
 const commandPalette = new CommandPaletteController({
   getCommands: () => getCommands(commandContext()),
   execute: (id) => runWorkspaceAction(id),
@@ -204,7 +305,32 @@ function commandContext(): CommandContext {
     focusMode,
     inspectorTab,
     helpOpen,
+    viewerMode,
+    annotationSelection: Boolean(selectedAnnotation),
+    keepAwake: screenAwake.enabled,
   };
+}
+function startCapture(): void {
+  if (!active() || busy) return;
+  drawingCanvas.cancel();
+  drawingCanvas.setEnabled(false);
+  captureRegion.startCapture();
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'capture-cancel secondary';
+  button.textContent = t('Cancel capture');
+  button.addEventListener('click', () => captureRegion.cancel());
+  app.querySelector('.canvas-shell')?.append(button);
+  toast('Drag over the drawing to capture an area. Press Escape to cancel.');
+}
+
+function changeAnnotations(next: DrawingAnnotation[]): void {
+  if (workspaceDocument.changeAnnotations(next)) {
+    if (!next.some((item) => item.id === selectedAnnotation)) selectedAnnotation = undefined;
+    renderPaper();
+    refreshInspector();
+    updateUndoControls();
+  }
 }
 function refreshDimensionBrowser(): void {
   const results = app.querySelector('#dimension-browser-results');
@@ -216,6 +342,7 @@ function refreshDimensionBrowser(): void {
       dimensionFilter,
       state.settings.precision,
     );
+  if (results) localizeUi(results);
 }
 function updateSelectionActions(): void {
   const bar = app.querySelector<HTMLElement>('#selection-actions');
@@ -225,6 +352,7 @@ function updateSelectionActions(): void {
   bar.innerHTML = count
     ? `<span class="selection-actions-count">${count} selected</span>${button('edit-dimension', count === 1 ? 'Edit' : 'Properties', 'dimension', 'selection-action')}${button('fit-selection', 'Focus', 'fit', 'selection-action', 'title="Fit selected dimensions · F"')}${button('delete-selected-dimensions', 'Delete', 'trash', 'selection-action destructive')}${button('clear-dimension-selection', '', 'close', 'selection-action', 'aria-label="Clear dimension selection"')}`
     : '';
+  localizeUi(bar);
 }
 function zoomOptions(): string {
   const value = drawingCanvas.zoom;
@@ -236,6 +364,7 @@ function zoomOptions(): string {
     .join('');
 }
 function refreshInspector(): void {
+  normalizeActiveViews();
   toleranceEditor.capture(app);
   const views = createWorkspaceViews({
     state,
@@ -246,6 +375,7 @@ function refreshInspector(): void {
     dimensionFilter,
     autoDetail,
     collapsedBranches,
+    annotationPanel: renderMarkupPanel(),
   });
   const body = app.querySelector('.inspector-body');
   if (body) body.innerHTML = views.renderInspector();
@@ -253,6 +383,7 @@ function refreshInspector(): void {
   updateCacheStatus();
   updateDrawingFeedback();
   updateSelectionActions();
+  localizeUi(app);
   for (const tab of app.querySelectorAll<HTMLElement>('.inspector-tabs [role="tab"]')) {
     const selected = tab.dataset.action === `tab:${inspectorTab}`;
     tab.classList.toggle('active', selected);
@@ -261,9 +392,9 @@ function refreshInspector(): void {
 }
 
 function toast(message: string): void {
-  notification = message;
+  notification = t(message);
   clearTimeout(toastTimer);
-  document.querySelector('#toast')!.textContent = message;
+  document.querySelector('#toast')!.textContent = notification;
   document.querySelector('#toast')!.classList.add('visible');
   toastTimer = setTimeout(() => {
     notification = '';
@@ -271,11 +402,107 @@ function toast(message: string): void {
   }, 5500);
 }
 
+function renderViewerControls(): string {
+  return `<div class="viewer-controls" role="toolbar" aria-label="Drawing viewer"><label class="viewer-part"><span class="sr-only">Part</span><select id="viewer-part" aria-label="Part">${state.parts.map((part) => `<option value="${e(part.id)}" ${part.id === state.activeId ? 'selected' : ''} data-user-content>${e(part.name)}</option>`).join('')}</select></label><label class="viewer-appearance"><span class="sr-only">Appearance</span><select id="viewer-appearance" aria-label="Appearance">${option('paper', 'Paper', screenAppearance())}${option('blueprint', 'Blueprint', screenAppearance())}</select></label>${button('toggle-wake-lock', '', 'sun', 'icon-button', `aria-label="Keep screen awake" aria-pressed="${screenAwake.enabled}"`)}<button type="button" class="viewer-awake" id="viewer-awake" data-status="${screenAwake.status}" aria-live="polite">${e(wakeStatusText())}</button>${button('share-drawing', '', 'copy', 'icon-button', 'aria-label="Copy image"')}${button('exit-viewer', '<span>Exit viewer</span>', 'close', 'secondary viewer-exit')}</div>`;
+}
+function renderMarkupPanel(): string {
+  const selected = annotations().find((item) => item.id === selectedAnnotation);
+  return `${renderAnnotationEditor(selected, annotationOptions)}<div class="annotation-list"><div class="section-label">ANNOTATIONS · ${annotations().length}</div>${annotations()
+    .map(
+      (item, index) =>
+        `<button type="button" class="annotation-list-item ${item.id === selectedAnnotation ? 'active' : ''}" data-annotation-select="${e(item.id)}"><span>${e(item.kind)}</span><span data-user-content>${e(item.text?.split('\n')[0].slice(0, 45) || String(index + 1))}</span></button>`,
+    )
+    .join('')}</div>`;
+}
+function wakeStatusText(): string {
+  return t(
+    {
+      off: 'Screen lock off',
+      requesting: 'Keeping screen awake…',
+      active: 'Screen stays awake',
+      paused: 'Screen lock paused · tap to retry',
+      unavailable: 'Screen lock unavailable · tap to retry',
+    }[screenAwake.status],
+  );
+}
+function updateViewerStatus(): void {
+  const status = app.querySelector<HTMLElement>('#viewer-awake');
+  if (status) {
+    status.textContent = wakeStatusText();
+    status.dataset.status = screenAwake.status;
+  }
+  const button = app.querySelector('[data-action="toggle-wake-lock"]');
+  button?.setAttribute('aria-pressed', String(screenAwake.enabled));
+}
+function enterViewer(): void {
+  if (!active() || busy) return;
+  viewerMode = true;
+  selectedAnnotation = undefined;
+  dimensionSelection.clear();
+  tool = 'select';
+  render();
+  screenAwake.setActive(true);
+  const generation = ++viewerGeneration;
+  if (document.fullscreenEnabled && document.documentElement.requestFullscreen) {
+    void document.documentElement
+      .requestFullscreen()
+      .then(() => {
+        if (generation !== viewerGeneration || !viewerMode) {
+          if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
+          return;
+        }
+        if (!document.fullscreenElement) {
+          exitViewer();
+          return;
+        }
+        nativeViewerFullscreen = true;
+      })
+      .catch(() => {
+        if (generation === viewerGeneration && viewerMode)
+          toast('Viewer fills this browser. System fullscreen is unavailable.');
+      });
+  }
+}
+function exitViewer(): void {
+  ++viewerGeneration;
+  viewerMode = false;
+  nativeViewerFullscreen = false;
+  screenAwake.setActive(false);
+  if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
+  render();
+}
+function openExportOptions(): void {
+  const dialog = document.createElement('dialog');
+  dialog.className = 'export-options-dialog';
+  dialog.innerHTML = `<form method="dialog"><div class="share-heading"><h2>Export drawing</h2><button class="icon-button" aria-label="Close">×</button></div></form><p class="share-message">PDF includes the checked parts. SVG exports the active part.</p><label>Appearance<select id="export-appearance">${option('paper', 'Paper · print ready', exportAppearance)}${option('blueprint', 'Blueprint · white on blue', exportAppearance)}</select></label><p class="share-message">Review annotations are included. Model measurements remain unchanged.</p><div class="share-actions">${button('export-svg', 'Save SVG', undefined, 'secondary')}${button('export-pdf', 'Save PDF', 'download', 'primary')}</div>`;
+  dialog.addEventListener('close', () => dialog.remove());
+  dialog.addEventListener('click', (event) => {
+    if (event.target === dialog) {
+      dialog.close();
+      return;
+    }
+    const action = (event.target as Element).closest<HTMLElement>('[data-action]')?.dataset.action;
+    if (action === 'export-svg' || action === 'export-pdf') {
+      exportAppearance = dialog.querySelector<HTMLSelectElement>('#export-appearance')!
+        .value as DrawingAppearance;
+      dialog.close();
+      runWorkspaceAction(action);
+    }
+  });
+  document.body.append(dialog);
+  localizeUi(dialog);
+  dialog.showModal();
+}
+
 function render(): void {
+  normalizeActiveViews();
+  if (selectedAnnotation && !annotations().some((item) => item.id === selectedAnnotation))
+    selectedAnnotation = undefined;
   toleranceEditor.capture(app);
   contextMenu.close(false);
   dimensionSelection.retain(dims().map((dimension) => dimension.id));
   document.documentElement.dataset.theme = theme;
+  document.documentElement.classList.toggle('workshop-viewer', viewerMode);
   const retainedCanvas = app.querySelector<HTMLElement>('#canvas-area');
   const part = active();
   const views = createWorkspaceViews({
@@ -287,60 +514,69 @@ function render(): void {
     dimensionFilter,
     autoDetail,
     collapsedBranches,
+    annotationPanel: renderMarkupPanel(),
   });
   app.innerHTML = `
     <header class="app-header">
       <a class="brand" href="./" aria-label="TechDraw home"><span class="brand-mark">${icon('dimension')}</span><span class="brand-wordmark"><strong>TechDraw<span class="brand-dot">.</span></strong><span class="brand-by">by DEFENCORE</span></span></a>
-      <div class="header-right"><span class="local-pill">${icon('lock')}<span>Files stay on your device</span></span>${button('command-palette', 'Commands <kbd>⌘ / Ctrl K</kbd>', 'search', 'command-search-trigger', 'aria-label="Search commands"')}${button('toggle-focus-mode', '', focusMode ? 'panels' : 'expand', 'icon-button', `aria-label="${focusMode ? 'Show panels' : 'Focus drawing'}" title="Focus drawing · Shift+F" aria-pressed="${focusMode}"`)}${button('help', 'Quick guide', 'info', 'quiet help-button')}${button('theme', '', theme === 'light' ? 'moon' : 'sun', 'icon-button', `aria-label="Switch to ${theme === 'light' ? 'dark' : 'light'} theme" title="Switch theme"`)}</div>
+      <div class="header-right"><span class="local-pill">${icon('lock')}<span>Files stay on your device</span></span>${renderProjectLink()}${renderLanguageControl()}${button('command-palette', 'Commands <kbd>⌘ / Ctrl K</kbd>', 'search', 'command-search-trigger', 'aria-label="Search commands"')}${button('toggle-focus-mode', '', focusMode ? 'panels' : 'expand', 'icon-button', `aria-label="${focusMode ? 'Show panels' : 'Focus drawing'}" title="Focus drawing · Shift+F" aria-pressed="${focusMode}"`)}${button('help', 'Quick guide', 'info', 'quiet help-button')}${button('theme', '', theme === 'light' ? 'moon' : 'sun', 'icon-button', `aria-label="Switch to ${theme === 'light' ? 'dark' : 'light'} theme" title="Switch theme"`)}</div>
     </header>
     <div class="workspace${focusMode ? ' focus-mode' : ''}">
       <aside class="files-panel" aria-label="Model files">
         <div class="panel-title"><span>WORKSPACE</span><span class="count">${state.parts.length}</span></div>
-        ${button('import', 'Import STEP', 'plus', 'import-button', busy ? 'disabled' : '')}
-        <input id="file-input" type="file" accept=".step,.stp,.STEP,.STP" multiple hidden />
-        <input id="project-input" type="file" accept=".json,.techdraw" hidden />
+        ${button('import', 'Import files', 'plus', 'import-button', busy ? 'disabled' : '')}
+        <input id="file-input" type="file" accept=".step,.stp,.dxf" multiple hidden />
+        <input id="project-input" type="file" accept=".zip,.json,.techdraw" hidden />
+        <details class="import-settings"><summary>Import settings</summary><label>DXF units<select id="dxf-unit">${option('file', 'From file · mm if unset', dxfUnit ?? 'file')}${(['mm', 'cm', 'm', 'in', 'ft'] as const).map((unit) => option(unit, unit, dxfUnit ?? 'file')).join('')}</select></label></details>
         <div class="file-tools">${button('open-project', 'Open project', 'file', 'text-button')}${button('save-project', 'Save', 'download', 'text-button', !part ? 'disabled' : '')}</div>
         <div class="files-section-heading"><span>PARTS</span>${state.parts.length ? button('select-all', state.selected.size === state.parts.length ? 'Clear' : 'Select all', undefined, 'text-button small') : ''}</div>
         <div class="part-list">${views.renderParts()}</div>
+        <details class="project-notes"><summary>Project description</summary><textarea id="project-description" data-user-content maxlength="10000" aria-label="Project description" placeholder="Notes for the engineer or customer">${e(state.description)}</textarea><p>Saved in the project archive with source files and editable drawing data.</p></details>
         <div class="sidebar-bottom"><div class="private-note">${icon('cube')}<div><strong>Real geometry. Local processing.</strong><p>STEP → CAD kernel → vector drawing.<br>No upload. No account.</p></div></div><a href="https://github.com/defencore/TechDraw" target="_blank" rel="noopener noreferrer">Source & documentation ${icon('arrow')}</a></div>
       </aside>
       <main class="drawing-workspace">
-        <div class="workspace-heading"><div><div class="eyebrow">DRAWING WORKSPACE</div><h1>${part ? e(part.name) : 'From solid to sheet'}</h1></div><div class="export-group">${button('export-svg', 'SVG', undefined, 'secondary compact', !part || busy ? 'disabled' : '')}${button('export-pdf', `Export PDF${state.selected.size > 1 ? ` · ${state.selected.size}` : ''}`, 'download', 'primary', !state.selected.size || busy ? 'disabled' : '')}</div></div>
+        <div class="workspace-heading"><div><div class="eyebrow">DRAWING WORKSPACE</div><h1 ${part ? 'data-user-content' : ''}>${part ? e(part.name) : 'From solid to sheet'}</h1></div><div class="export-group">${button('view-drawing', 'View', 'expand', 'secondary compact', !part || busy ? 'disabled' : '')}${button('share-drawing', 'Copy image', 'copy', 'secondary compact', !part || busy ? 'disabled' : '')}${button('export-options', `Export${state.selected.size > 1 ? ` · ${state.selected.size}` : ''}`, 'download', 'primary', !state.selected.size || busy ? 'disabled' : '')}</div></div>
         <div id="workspace-feedback" role="status" aria-live="polite" hidden></div>
-        <div class="canvas-shell"><div id="selection-actions" class="selection-actions" role="toolbar" aria-label="Selected dimension actions" hidden></div>${renderWorkspaceControls({ tool, enabled: Boolean(part) && !busy, canUndo: Boolean(workspaceDocument.history?.canUndo), canRedo: Boolean(workspaceDocument.history?.canRedo), zoomOptions: zoomOptions(), grid })}
+        <div class="canvas-shell"><div id="selection-actions" class="selection-actions" role="toolbar" aria-label="Selected dimension actions" hidden></div>${renderWorkspaceControls({ tool, mode: inspectorTab === 'annotations' ? 'annotations' : 'dimensions', enabled: Boolean(part) && !busy, canUndo: Boolean(workspaceDocument.history?.canUndo), canRedo: Boolean(workspaceDocument.history?.canRedo), zoomOptions: zoomOptions(), grid })}
         <div class="canvas-area ${dimensionTools.some((item) => item.id === tool) ? 'measuring' : ''}" id="canvas-area" tabindex="0" aria-label="Drawing canvas. Wheel to zoom, drag empty space to pan."><div class="drop-overlay">${icon('upload')}Drop STEP files to import</div><div id="paper-host"></div>${!part ? views.renderEmpty() : ''}</div>
-        </div><div class="canvas-status"><span id="tool-hint">${e(canvasHint)}</span><span>${part ? `${state.settings.format} · ${state.settings.orientation} · mm` : 'STEP / STP · Multiple files supported'}</span></div>
+        </div><div class="canvas-status"><span id="tool-hint">${e(canvasHint)}</span><span>${part ? `${state.settings.format} · ${state.settings.orientation} · mm` : 'STEP / STP / DXF · Multiple files supported'}</span></div>
       </main>
       <aside class="inspector" aria-label="Drawing properties">
-        <div class="inspector-tabs" role="tablist">${['sheet', 'details', 'dimensions'].map((t) => `<button role="tab" aria-selected="${inspectorTab === t}" data-action="tab:${t}" class="${inspectorTab === t ? 'active' : ''}">${t === 'details' ? 'Title block' : t[0].toUpperCase() + t.slice(1)}</button>`).join('')}</div>
+        <div class="inspector-tabs" role="tablist">${['sheet', 'details', 'dimensions', 'annotations'].map((tab) => `<button role="tab" aria-selected="${inspectorTab === tab}" data-action="tab:${tab}" class="${inspectorTab === tab ? 'active' : ''}">${tab === 'details' ? 'Title block' : tab === 'annotations' ? 'Markup' : tab[0].toUpperCase() + tab.slice(1)}</button>`).join('')}</div>
         <div class="inspector-body">${views.renderInspector()}</div>
         <div class="review-note">${icon('info')}<p><strong>Review before manufacture</strong>Automatic dimensions are a starting point. Confirm features, tolerances, fits and sections.</p></div>
       </aside>
     </div>
     <div id="busy-overlay" class="busy-overlay ${busy ? 'visible' : ''}" role="status" aria-live="polite"><div class="busy-card"><span class="spinner"></span><strong>${busyOperation === 'export' ? 'Exporting your PDF' : 'Preparing your drawing'}</strong><p id="progress-message">${e(progress)}</p>${busyOperation === 'import' ? button('cancel', 'Cancel', undefined, 'secondary') : ''}</div></div>
     <div id="toast" class="toast ${notification ? 'visible' : ''}" role="status" aria-live="polite">${e(notification)}</div>
-    ${helpOpen ? views.renderHelp() : ''}`;
+    ${helpOpen ? views.renderHelp() : ''}${viewerMode ? renderViewerControls() : ''}`;
   if (retainedCanvas) app.querySelector('#canvas-area')!.replaceWith(retainedCanvas);
   const canvas = app.querySelector<HTMLElement>('#canvas-area')!;
   const empty = canvas.querySelector('.empty-workspace');
   if (part) empty?.remove();
   else if (!empty) canvas.insertAdjacentHTML('beforeend', views.renderEmpty());
   drawingCanvas.attach(canvas);
+  captureRegion.attach(canvas);
   drawingCanvas.setEnabled(!busy && !helpOpen);
+  drawingCanvas.setReadOnly(viewerMode);
+  drawingCanvas.setAnnotationOptions(annotationOptions);
   drawingCanvas.setTool(tool);
-  drawingCanvas.setGrid(grid);
+  drawingCanvas.setGrid(viewerMode ? { ...grid, visible: false, snap: false } : grid);
   renderPaper();
   toleranceEditor.restore(app);
   updateCacheStatus();
   updateSelectionActions();
+  localizeUi(app);
 }
 
 function updateCacheStatus(): void {
   const status = app.querySelector('#title-block-cache-status');
   if (status)
-    status.textContent = titleBlockCached
-      ? 'Saved automatically in this browser and reused for your next drawing.'
-      : 'Session only. Browser storage is unavailable. Save a project to keep these fields.';
+    status.textContent = t(
+      titleBlockCached
+        ? 'Saved automatically in this browser and reused for your next drawing.'
+        : 'Session only. Browser storage is unavailable. Save a project to keep these fields.',
+    );
 }
 function cacheTitleBlock(): void {
   titleBlockCached = saveTitleBlockCache(titleBlockStorage, state.settings);
@@ -359,6 +595,9 @@ function renderPaper(): void {
           layout: layout!,
           selectedDimension: dimensionSelection.focus,
           selectedDimensionIds: [...dimensionSelection.ids],
+          annotations: annotations(),
+          selectedAnnotation,
+          appearance: screenAppearance(),
         }
       : undefined,
   );
@@ -376,7 +615,8 @@ function renderPaper(): void {
       .join('');
   updateDrawingFeedback();
   if (stats)
-    stats.innerHTML = `<dl><dt>Views</dt><dd>4 · First angle</dd><dt>Sheet size</dt><dd>${rendered.width} × ${rendered.height} mm</dd><dt>Scale</dt><dd>${rendered.scale >= 1 ? `${+rendered.scale.toFixed(3)}:1` : `1:${+(1 / rendered.scale).toFixed(3)}`}</dd><dt>Dimensions</dt><dd>${dims().length}</dd></dl>${rendered.warnings.map((w) => `<p class="layout-warning">${e(w)}</p>`).join('')}`;
+    stats.innerHTML = `<dl><dt>Views</dt><dd>${part.sourceKind === 'dxf' ? '2D · DXF' : '4 · First angle'}</dd><dt>Sheet size</dt><dd>${rendered.width} × ${rendered.height} mm</dd><dt>Scale</dt><dd>${rendered.scale >= 1 ? `${+rendered.scale.toFixed(3)}:1` : `1:${+(1 / rendered.scale).toFixed(3)}`}</dd><dt>Dimensions</dt><dd>${dims().length}</dd></dl>${rendered.warnings.map((w) => `<p class="layout-warning">${e(w)}</p>`).join('')}`;
+  localizeUi(app.querySelector('.inspector-body') ?? app);
 }
 
 function updateDrawingFeedback(): void {
@@ -389,6 +629,7 @@ function updateDrawingFeedback(): void {
       feedback.dataset.warnings = signature;
     }
     feedback.hidden = !warnings.length;
+    localizeUi(feedback);
   }
   const dimensionWarning = app.querySelector('#dimension-layout-warning');
   if (dimensionWarning)
@@ -403,16 +644,28 @@ function updateDrawingFeedback(): void {
 
 function updateProgress(): void {
   const el = document.querySelector('#progress-message');
-  if (el) el.textContent = progress;
+  if (el) el.textContent = t(progress);
 }
 function setTool(value: CanvasTool): void {
   if (busy || (value !== 'select' && value !== 'pan' && !active())) return;
   drawingCanvas.cancel();
   tool = value;
   drawingCanvas.setTool(value);
+  if (['text', 'arrow', 'rectangle', 'ellipse', 'freehand'].includes(value)) {
+    selectedAnnotation = undefined;
+    dimensionSelection.clear();
+    inspectorTab = 'annotations';
+    render();
+    return;
+  }
   if (dimensionTools.some((item) => item.id === value)) {
+    const switchingMode = inspectorTab === 'annotations';
     dimensionSelection.clear();
     inspectorTab = 'dimensions';
+    if (switchingMode) {
+      render();
+      return;
+    }
     refreshInspector();
     renderPaper();
   }
@@ -543,10 +796,10 @@ app.addEventListener('input', (event) => {
 });
 
 async function importFiles(files: File[]): Promise<void> {
-  if (busy) return;
-  const valid = files.filter((f) => /\.(step|stp)$/i.test(f.name));
+  if (busy || viewerMode) return;
+  const valid = files.filter((f) => /\.(step|stp|dxf)$/i.test(f.name));
   if (!valid.length) {
-    toast('Choose a STEP (.step or .stp) file.');
+    toast('Choose a STEP (.step, .stp) or DXF (.dxf) file.');
     return;
   }
   busy = true;
@@ -567,10 +820,18 @@ async function importFiles(files: File[]): Promise<void> {
       try {
         progress = `Reading ${file.name}…`;
         updateProgress();
-        const result = await cad.importStep(await file.arrayBuffer(), file.name);
+        const bytes = await file.arrayBuffer();
+        const original = new Uint8Array(bytes).slice();
+        const kind = /\.dxf$/i.test(file.name) ? 'dxf' : 'step';
+        const result =
+          kind === 'dxf'
+            ? importDxf(bytes, file.name, { unit: dxfUnit })
+            : await cad.importStep(bytes, file.name);
         if (token !== importToken) break;
+        const source = sources.add({ name: file.name, kind, bytes: original });
         for (const part of result.parts) {
           part.id = crypto.randomUUID();
+          part.sourceId = source.id;
           workspaceDocument.addPart(part);
           firstAddedId ??= part.id;
           added++;
@@ -589,7 +850,8 @@ async function importFiles(files: File[]): Promise<void> {
         tool = 'select';
       }
       render();
-      if (errors.length) toast([...new Set(errors)].join(' ').slice(0, 700));
+      if (errors.length)
+        toast([...new Set(errors.map((message) => t(message)))].join(' ').slice(0, 700));
       else if (added)
         toast(
           `${added} ${added === 1 ? 'part' : 'parts'} imported. Review the dimensions before export.`,
@@ -608,8 +870,14 @@ async function loadDemo(): Promise<void> {
   try {
     const result = await cad.demo();
     if (token !== importToken) return;
+    const source = sources.add({
+      name: result.sourceName,
+      kind: 'step',
+      bytes: result.sourceBytes,
+    });
     for (const part of result.parts) {
       part.id = crypto.randomUUID();
+      part.sourceId = source.id;
       workspaceDocument.addPart(part);
       state.activeId = part.id;
     }
@@ -621,6 +889,18 @@ async function loadDemo(): Promise<void> {
       busy = false;
       render();
     }
+  }
+}
+async function loadDxfDemo(): Promise<void> {
+  if (busy) return;
+  try {
+    const response = await fetch(`${import.meta.env.BASE_URL}examples/inspection-plate.dxf`);
+    if (!response.ok) throw new Error('The example DXF file could not be loaded.');
+    await importFiles([
+      new File([await response.arrayBuffer()], 'inspection-plate.dxf', { type: 'application/dxf' }),
+    ]);
+  } catch (error) {
+    toast(errorMessage(error));
   }
 }
 async function exportDrawing(): Promise<void> {
@@ -640,6 +920,8 @@ async function exportDrawing(): Promise<void> {
           dimensions: state.dimensions[part.id] ?? [],
           settings: state.settings,
           layout,
+          annotations: state.annotations[part.id] ?? [],
+          appearance: exportAppearance,
         };
       }),
       parts.length === 1 ? `${safeName(parts[0].name)}.pdf` : 'techdraw-drawing-set.pdf',
@@ -654,39 +936,63 @@ async function exportDrawing(): Promise<void> {
 }
 const safeName = (name: string) => name.replace(/[^a-z0-9_.-]+/gi, '-').slice(0, 100) || 'drawing';
 
-function saveProject(): void {
+async function saveProject(): Promise<void> {
   try {
     for (const part of state.parts) workspaceDocument.layout(part);
+    const bytes = await createProjectArchive(state, sources.all(), {
+      description: state.description,
+    });
     downloadBlob(
-      new Blob([serializeProject(state)], { type: 'application/json' }),
-      'workspace.techdraw.json',
+      new Blob([new Uint8Array(bytes)], { type: 'application/zip' }),
+      'workspace.techdraw.zip',
     );
-    toast('Editable project saved to your device.');
+    toast('Project archive saved with source files, dimensions and annotations.');
   } catch (error) {
     toast(`Cannot save project: ${errorMessage(error)}`);
   }
 }
 
 async function openProject(file: File): Promise<void> {
-  if (file.size > 100 * 1024 * 1024) {
-    toast('Project exceeds the 100 MB limit.');
+  if (busy || viewerMode) return;
+  if (file.size > (/\.zip$/i.test(file.name) ? 128 : 100) * 1024 * 1024) {
+    toast('Project exceeds the supported file size limit.');
     return;
   }
+  const token = ++importToken;
+  busy = true;
+  busyOperation = 'import';
+  progress = 'Opening project…';
+  render();
   try {
-    const data = parseProject(await file.text());
+    const archive = /\.zip$/i.test(file.name)
+      ? await openProjectArchive(new Uint8Array(await file.arrayBuffer()))
+      : undefined;
+    const data = archive?.project ?? parseProject(await file.text());
+    if (token !== importToken) return;
     toleranceEditor.reset();
     const savedOrientation = data.settings.orientation;
     workspaceDocument.replace(data);
+    sources.replace(archive?.sources ?? []);
     normalizeSheetOrientation();
     if (savedOrientation !== state.settings.orientation) state.layouts = {};
     cacheTitleBlock();
     drawingCanvas.cancel();
     dimensionSelection.clear();
+    selectedAnnotation = undefined;
     tool = 'select';
+    busy = false;
     render();
-    toast('Editable project opened.');
+    toast(
+      archive?.missingSources.length
+        ? 'Project opened. Some original source files were unavailable when it was saved.'
+        : 'Editable project opened.',
+    );
   } catch (err) {
-    toast(`Cannot open project: ${errorMessage(err)}`);
+    if (token === importToken) {
+      busy = false;
+      render();
+      toast(`Cannot open project: ${errorMessage(err)}`);
+    }
   }
 }
 
@@ -701,7 +1007,7 @@ function addDimension(d: Dimension): void {
 function updateGrid(next: GridSettings): void {
   grid = next;
   saveGridPreferences(grid, titleBlockStorage);
-  drawingCanvas.setGrid(grid);
+  drawingCanvas.setGrid(viewerMode ? { ...grid, visible: false, snap: false } : grid);
   updateGridDensity();
   for (const [action, value] of [
     ['toggle-grid', grid.visible],
@@ -718,8 +1024,8 @@ function updateGridDensity(): void {
   if (!label) return;
   const shown = drawingCanvas.gridDisplaySpacing;
   label.hidden = shown === undefined || shown <= grid.spacing + 1e-8;
-  label.textContent = shown === undefined ? '' : `${Number(shown.toPrecision(6))} mm shown`;
-  label.title = `Zoom in for finer grid lines. Snapping still uses ${grid.spacing} mm.`;
+  label.textContent = shown === undefined ? '' : t(`${Number(shown.toPrecision(6))} mm shown`);
+  label.title = t(`Zoom in for finer grid lines. Snapping still uses ${grid.spacing} mm.`);
 }
 
 function placeSelectedDimensions(side: PlacementSide): void {
@@ -775,9 +1081,24 @@ function refreshAutomaticDimensions(): void {
 }
 
 function openInspector(tab: string): void {
+  const annotationTool = ['text', 'arrow', 'rectangle', 'ellipse', 'freehand'].includes(tool);
+  if (
+    (tab !== 'annotations' && annotationTool) ||
+    (tab === 'annotations' && dimensionTools.some((item) => item.id === tool))
+  )
+    tool = 'select';
   focusMode = false;
   inspectorTab = tab;
   render();
+}
+function normalizeActiveViews(): void {
+  const part = active();
+  if (!part) return;
+  const available = part.views.filter((view) => view.id !== 'iso').map((view) => view.id);
+  if (!available.includes(placement.view))
+    placement.view = available[0] as PlacementControls['view'];
+  if (dimensionFilter.view !== 'all' && !available.includes(dimensionFilter.view))
+    dimensionFilter.view = 'all';
 }
 function deleteDimensions(ids: ReadonlySet<string>): void {
   if (!ids.size || !state.activeId) return;
@@ -792,21 +1113,47 @@ function travelHistory(direction: 'undo' | 'redo'): void {
   drawingCanvas.cancel();
   if (workspaceDocument.travel(direction)) {
     dimensionSelection.retain(dims().map((dimension) => dimension.id));
+    if (!annotations().some((item) => item.id === selectedAnnotation))
+      selectedAnnotation = undefined;
     render();
   }
 }
 const toolActions = Object.fromEntries(
-  (['select', 'pan', 'box-select', ...dimensionTools.map((item) => item.id)] as CanvasTool[]).map(
-    (value) => [`tool:${value}`, () => setTool(value)],
-  ),
+  (
+    [
+      'select',
+      'pan',
+      'box-select',
+      'text',
+      'arrow',
+      'rectangle',
+      'ellipse',
+      'freehand',
+      ...dimensionTools.map((item) => item.id),
+    ] as CanvasTool[]
+  ).map((value) => [`tool:${value}`, () => setTool(value)]),
 ) as Record<`tool:${CanvasTool}`, () => void>;
 const commandHandlers: Record<CommandId, () => void> = {
   ...toolActions,
   import: () => app.querySelector<HTMLInputElement>('#file-input')!.click(),
   'open-project': () => app.querySelector<HTMLInputElement>('#project-input')!.click(),
-  'save-project': saveProject,
+  'save-project': () => {
+    void saveProject();
+  },
+  'view-drawing': enterViewer,
+  'exit-viewer': exitViewer,
+  'toggle-wake-lock': () => {
+    screenAwake.setEnabled(!screenAwake.enabled);
+    updateViewerStatus();
+  },
+  'share-drawing': () => imageShare.open(screenAppearance()),
+  'capture-region': startCapture,
+  'export-options': openExportOptions,
   demo: () => {
     void loadDemo();
+  },
+  'demo-dxf': () => {
+    void loadDxfDemo();
   },
   'export-pdf': () => {
     void exportDrawing();
@@ -821,6 +1168,7 @@ const commandHandlers: Record<CommandId, () => void> = {
             state.settings,
             undefined,
             workspaceDocument.layout(active()!),
+            { annotations: annotations(), appearance: exportAppearance },
           ).svg,
         ],
         { type: 'image/svg+xml' },
@@ -856,10 +1204,21 @@ const commandHandlers: Record<CommandId, () => void> = {
     dimensionSelection.clear();
     render();
   },
-  'delete-selected-dimensions': () => deleteDimensions(new Set(dimensionSelection.ids)),
+  'delete-selected-dimensions': () => {
+    if (selectedAnnotation)
+      changeAnnotations(annotations().filter((item) => item.id !== selectedAnnotation));
+    else deleteDimensions(new Set(dimensionSelection.ids));
+  },
   'delete-dimension': () =>
     deleteDimensions(new Set(dimensionSelection.focus ? [dimensionSelection.focus] : [])),
   'edit-dimension': () => {
+    if (selectedAnnotation) {
+      openInspector('annotations');
+      app
+        .querySelector<HTMLElement>('.annotation-editor textarea,.annotation-editor input')
+        ?.focus();
+      return;
+    }
     openInspector('dimensions');
     const details = app.querySelector<HTMLDetailsElement>('.focused-dimension-editor');
     if (details) details.open = true;
@@ -899,6 +1258,7 @@ const commandHandlers: Record<CommandId, () => void> = {
   'tab:sheet': () => openInspector('sheet'),
   'tab:details': () => openInspector('details'),
   'tab:dimensions': () => openInspector('dimensions'),
+  'tab:annotations': () => openInspector('annotations'),
   theme: () => {
     theme = theme === 'light' ? 'dark' : 'light';
     savePreference('theme', theme);
@@ -934,6 +1294,32 @@ const commandHandlers: Record<CommandId, () => void> = {
   },
 };
 function runWorkspaceAction(action: string): void {
+  if (captureRegion.active && action !== 'capture-region') captureRegion.cancel();
+  if (action === 'language:en' || action === 'language:uk') {
+    setLanguage(action === 'language:en' ? 'en' : 'uk', titleBlockStorage);
+    render();
+    return;
+  }
+  if (
+    viewerMode &&
+    ![
+      'exit-viewer',
+      'toggle-wake-lock',
+      'share-drawing',
+      'capture-region',
+      'export-options',
+      'export-pdf',
+      'export-svg',
+      'zoom-in',
+      'zoom-out',
+      'fit',
+      'theme',
+      'command-palette',
+      'tool:pan',
+      'tool:select',
+    ].includes(action)
+  )
+    return;
   const command = getCommand(action, commandContext());
   if (!command) return;
   if (!command.enabled) {
@@ -947,6 +1333,37 @@ function runWorkspaceAction(action: string): void {
 app.addEventListener('click', (event) => {
   const target = event.target as Element;
   syncSettingsFromControls();
+  if (target.closest('#viewer-awake')) {
+    screenAwake.retry();
+    return;
+  }
+  const annotationAction = target.closest<HTMLElement>('[data-annotation-action]')?.dataset
+    .annotationAction;
+  if (annotationAction && selectedAnnotation) {
+    const selected = annotations().find((item) => item.id === selectedAnnotation);
+    if (!selected) return;
+    try {
+      if (annotationAction === 'delete')
+        changeAnnotations(annotations().filter((item) => item.id !== selected.id));
+      else if (annotationAction === 'apply') {
+        const edited = readAnnotationEdit(app, selected);
+        changeAnnotations(annotations().map((item) => (item.id === edited.id ? edited : item)));
+      }
+    } catch (error) {
+      toast(errorMessage(error));
+    }
+    return;
+  }
+  const annotationId = target.closest<HTMLElement>('[data-annotation-select]')?.dataset
+    .annotationSelect;
+  if (annotationId) {
+    selectedAnnotation = annotationId;
+    dimensionSelection.clear();
+    tool = 'select';
+    inspectorTab = 'annotations';
+    render();
+    return;
+  }
   if (toleranceEditor.handleClick(target)) return;
   if (target.classList.contains('modal-backdrop')) {
     helpOpen = false;
@@ -969,6 +1386,7 @@ app.addEventListener('click', (event) => {
     drawingCanvas.cancel();
     workspaceDocument.removePart(removeId);
     dimensionSelection.clear();
+    selectedAnnotation = undefined;
     tool = 'select';
     render();
     return;
@@ -978,6 +1396,7 @@ app.addEventListener('click', (event) => {
     drawingCanvas.cancel();
     state.activeId = partId;
     dimensionSelection.clear();
+    selectedAnnotation = undefined;
     render();
     return;
   }
@@ -994,6 +1413,33 @@ app.addEventListener('click', (event) => {
 
 app.addEventListener('change', (event) => {
   const target = event.target as HTMLInputElement;
+  if (target.id === 'dxf-unit') {
+    dxfUnit = target.value === 'file' ? undefined : (target.value as DxfUnit);
+    return;
+  }
+  if (target.id === 'viewer-part') {
+    state.activeId = target.value;
+    selectedAnnotation = undefined;
+    dimensionSelection.clear();
+    render();
+    return;
+  }
+  if (target.id === 'viewer-appearance') {
+    drawingAppearance = target.value as DrawingAppearance;
+    renderPaper();
+    return;
+  }
+  if (target.dataset.annotationSetting) {
+    if (!selectedAnnotation) {
+      try {
+        Object.assign(annotationOptions, readAnnotationOptions(app, annotationOptions));
+        drawingCanvas.setAnnotationOptions(annotationOptions);
+      } catch (error) {
+        toast(errorMessage(error));
+      }
+    }
+    return;
+  }
   if (target.id === 'dimension-filter-view' || target.id === 'dimension-filter-kind') {
     if (target.id === 'dimension-filter-view')
       dimensionFilter.view = target.value as typeof dimensionFilter.view;
@@ -1108,10 +1554,11 @@ window.addEventListener('drop', (event) => {
   event.preventDefault();
   dragDepth = 0;
   document.querySelector('#canvas-area')?.classList.remove('dragover');
-  if (event.dataTransfer) void importFiles([...event.dataTransfer.files]);
+  if (event.dataTransfer && !viewerMode) void importFiles([...event.dataTransfer.files]);
 });
 window.addEventListener('keydown', (event) => {
   if (event.defaultPrevented || commandPalette.isOpen) return;
+  if (document.querySelector('dialog[open]')) return;
   if (toleranceEditor.handleKeydown(event)) return;
   if (helpOpen && event.key === 'Tab') {
     const controls = [
@@ -1131,6 +1578,14 @@ window.addEventListener('keydown', (event) => {
   const editing = isEditingTarget(event.target);
   if (event.key === 'Escape') {
     event.preventDefault();
+    if (captureRegion.active) {
+      captureRegion.cancel();
+      return;
+    }
+    if (viewerMode) {
+      exitViewer();
+      return;
+    }
     if (helpOpen) {
       helpOpen = false;
       render();
@@ -1180,6 +1635,26 @@ window.addEventListener('keyup', (event) => {
   if (event.code === 'Space') drawingCanvas.setPanKey(false);
 });
 window.addEventListener('blur', () => drawingCanvas.setPanKey(false));
+document.addEventListener('visibilitychange', () => screenAwake.visibilityChanged());
+document.addEventListener('fullscreenchange', () => {
+  if (nativeViewerFullscreen && viewerMode && !document.fullscreenElement) exitViewer();
+});
+window.addEventListener('pagehide', () => screenAwake.setActive(false));
+window.addEventListener('pageshow', () => {
+  if (viewerMode) screenAwake.setActive(true);
+});
+app.addEventListener('input', (event) => {
+  const input = event.target as HTMLInputElement;
+  if (input.id === 'project-description') state.description = input.value.slice(0, 10000);
+  if (input.dataset.annotationSetting && !selectedAnnotation) {
+    try {
+      Object.assign(annotationOptions, readAnnotationOptions(app, annotationOptions));
+      drawingCanvas.setAnnotationOptions(annotationOptions);
+    } catch {
+      /* Incomplete values remain editable. */
+    }
+  }
+});
 window.addEventListener('beforeunload', (event) => {
   if (state.parts.length) {
     event.preventDefault();

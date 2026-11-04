@@ -2,7 +2,7 @@ import type { DrawingSettings } from '../model';
 import { button, field } from './components';
 import { escapeHtml } from './utils';
 
-/** The editor stays in English; frame labels follow the selected template language. */
+/** Interface language and drawing-frame language are independent. */
 export function renderTitleBlockEditor(s: DrawingSettings, partName?: string): string {
   const signoffs = [
     ['Drawn by', 'author', 'signature', 'date'],
@@ -15,7 +15,7 @@ export function renderTitleBlockEditor(s: DrawingSettings, partName?: string): s
     <div id="title-block-warning" aria-live="polite"></div>
     <p id="title-block-cache-status" class="field-help" aria-live="polite"></p>
     <p class="field-help">Clear starts a new title block. Model files are not cached.</p>
-    ${field('Drawing title', 'title', s.title, partName ?? 'Use part name')}
+    ${field('Drawing title', 'title', s.title, partName ?? 'Use part name', Boolean(partName))}
     ${field('Drawing number', 'number', s.number, 'e.g. TD-001')}
     ${field('Material', 'material', s.material, 'Specify material')}
     ${field('Organization', 'organization', s.organization, 'Company or department')}

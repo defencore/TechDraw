@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import type { DrawingLayout, Part, Projection } from '../src/model';
+import type { DrawingAnnotation, DrawingLayout, Part, Projection } from '../src/model';
 import { parseProject, serializeProject } from '../src/project';
 import { defaultSettings, type WorkspaceState } from '../src/state';
 
@@ -42,6 +42,8 @@ function workspace(): WorkspaceState {
     activeId: part.id,
     selected: new Set([part.id]),
     settings: { ...defaultSettings },
+    annotations: {},
+    description: '',
     layouts: {},
     dimensions: {
       [part.id]: [
@@ -392,4 +394,70 @@ test('angular dimensions accept numeric deviations in degrees and reject fit des
   });
   project.dimensions['part-1'][0].tolerance = { kind: 'fit', designation: 'H7' };
   assert.throws(() => parseProject(JSON.stringify(project)), /not valid for angular/);
+});
+
+test('paper annotations and project descriptions roundtrip through fresh whitelisted objects', () => {
+  const state = workspace();
+  state.description = 'Assembly check 😀';
+  const note: DrawingAnnotation = {
+    id: 'note',
+    kind: 'text',
+    points: [[25.5, 40.25]],
+    text: 'Inspect Ø6 😀',
+    strokeWidth: 0.3,
+    fontSize: 4,
+  };
+  state.annotations['part-1'] = [note];
+  const parsed = parseProject(serializeProject(state));
+  assert.equal(parsed.description, state.description);
+  assert.deepEqual(parsed.annotations['part-1'], [note]);
+  assert.notEqual(parsed.annotations['part-1'][0], note);
+  const data = JSON.parse(serializeProject(state));
+  data.annotations['part-1'][0].script = 'discard';
+  assert.equal('script' in parseProject(JSON.stringify(data)).annotations['part-1'][0], false);
+});
+
+test('malformed or orphan annotations and invalid XML text are rejected before rendering', () => {
+  const state = workspace();
+  state.annotations['part-1'] = [
+    {
+      id: 'note',
+      kind: 'text',
+      points: [[20, 30]],
+      text: 'Inspect',
+      strokeWidth: 0.3,
+      fontSize: 4,
+    },
+  ];
+  const base = JSON.parse(serializeProject(state));
+  for (const mutate of [
+    (data: any) => {
+      data.annotations.orphan = [];
+    },
+    (data: any) => {
+      data.annotations['part-1'][0].strokeWidth = -1;
+    },
+    (data: any) => {
+      data.annotations['part-1'][0].points.push([30, 40]);
+    },
+    (data: any) => {
+      data.annotations['part-1'][0].kind = 'script';
+    },
+    (data: any) => {
+      data.annotations['part-1'][0].text = '\uD800';
+    },
+    (data: any) => {
+      data.settings.title = '\uFFFF';
+    },
+    (data: any) => {
+      data.description = '\uDFFF';
+    },
+    (data: any) => {
+      data.annotations['part-1'].push(data.annotations['part-1'][0]);
+    },
+  ]) {
+    const data = structuredClone(base);
+    mutate(data);
+    assert.throws(() => parseProject(JSON.stringify(data)), /Invalid project/);
+  }
 });

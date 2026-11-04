@@ -4,6 +4,7 @@ import type {
   Bounds2,
   Dimension,
   DrawingLayout,
+  DrawingAnnotation,
   DrawingSettings,
   Part,
   Point2,
@@ -20,6 +21,8 @@ export interface ProjectData {
   dimensions: Record<string, Dimension[]>;
   layouts: Record<string, DrawingLayout>;
   settings: DrawingSettings;
+  annotations: Record<string, DrawingAnnotation[]>;
+  description: string;
 }
 
 const VIEWS: ViewId[] = ['front', 'top', 'right', 'iso'];
@@ -43,7 +46,8 @@ function string(value: unknown, label: string, max = 1024): string {
   if (
     typeof value !== 'string' ||
     value.length > max ||
-    /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(value)
+    /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(value) ||
+    /[\uD800-\uDFFF\uFFFE\uFFFF]/u.test(value)
   )
     return invalid(`${label} must be text of at most ${max} characters.`);
   return value;
@@ -190,8 +194,14 @@ function part(value: unknown, budget: Budget): Part {
     uniqueId(parsed.id, seenViews, 'projection ID');
     return parsed;
   });
-  if (views.length !== 4)
-    return invalid('every part must contain front, top, right and isometric projections.');
+  const sourceKind =
+    p.sourceKind === undefined
+      ? undefined
+      : choice(p.sourceKind, ['step', 'dxf'] as const, 'source format');
+  if (sourceKind === 'dxf' ? views.length !== 1 || views[0].id !== 'front' : views.length !== 4)
+    return invalid(
+      'DXF parts require one front projection; STEP parts require front, top, right and isometric projections.',
+    );
   const result: Part = {
     id: identifier(p.id, 'part ID'),
     name: string(p.name, 'part name'),
@@ -202,6 +212,12 @@ function part(value: unknown, budget: Budget): Part {
     path: array(p.path, 128, 'assembly path').map((v) => string(v, 'assembly path item')),
     warnings: array(p.warnings, 256, 'import notes').map((v) => string(v, 'import note', 4096)),
   };
+  if (sourceKind !== undefined) result.sourceKind = sourceKind;
+  if (p.sourceId !== undefined) result.sourceId = identifier(p.sourceId, 'source ID');
+  if (p.sourceNotes !== undefined)
+    result.sourceNotes = array(p.sourceNotes, 1000, 'source notes').map((value) =>
+      string(value, 'source note', 10000),
+    );
   if (p.features !== undefined) {
     const features = record(p.features, 'analytic features');
     const ids = new Set<string>();
@@ -310,6 +326,59 @@ function settings(value: unknown): DrawingSettings {
   };
 }
 
+function annotation(value: unknown, budget: Budget): DrawingAnnotation {
+  const data = record(value, 'annotation');
+  const kind = choice(
+    data.kind,
+    ['text', 'arrow', 'rectangle', 'ellipse', 'freehand'] as const,
+    'annotation kind',
+  );
+  const points = array(data.points, 20000, 'annotation points').map((value) =>
+    point(value, 2, 'annotation point'),
+  );
+  budget.points += points.length;
+  if (budget.points > 2000000)
+    return invalid('annotation geometry exceeds the project point limit.');
+  if (points.some((point) => point.some((coordinate) => Math.abs(coordinate) > 10000)))
+    return invalid('annotation points exceed the supported sheet coordinates.');
+  if (
+    kind === 'text'
+      ? points.length !== 1
+      : kind === 'freehand'
+        ? points.length < 2
+        : points.length !== 2
+  )
+    return invalid('annotation point count does not match its kind.');
+  const strokeWidth = numeric(data.strokeWidth, 'annotation stroke width', 10);
+  if (strokeWidth < 0.1) return invalid('annotation stroke width must be 0.1–10 mm.');
+  const output: DrawingAnnotation = {
+    id: identifier(data.id, 'annotation ID'),
+    kind,
+    points,
+    strokeWidth,
+  };
+  if (data.text !== undefined) output.text = string(data.text, 'annotation text', 10000);
+  if (kind === 'text' && !output.text?.trim())
+    return invalid('text annotations require nonempty text.');
+  if (data.fontSize !== undefined) {
+    output.fontSize = numeric(data.fontSize, 'annotation font size', 100);
+    if (output.fontSize < 1) return invalid('annotation font size must be 1–100 mm.');
+  }
+  if (
+    kind !== 'text' &&
+    points.every((point) => point[0] === points[0][0] && point[1] === points[0][1])
+  )
+    return invalid('annotation geometry must have a nonzero extent.');
+  if (
+    (kind === 'rectangle' || kind === 'ellipse') &&
+    (Math.abs(points[1][0] - points[0][0]) < 0.1 || Math.abs(points[1][1] - points[0][1]) < 0.1)
+  )
+    return invalid(
+      'rectangle and ellipse annotations require width and height of at least 0.1 mm.',
+    );
+  return output;
+}
+
 /** Persist sheet-space geometry so manual annotation edits never trigger an implicit reflow. */
 function layout(value: unknown): DrawingLayout {
   const data = record(value, 'drawing layout');
@@ -364,6 +433,8 @@ export function parseProject(text: string): ProjectData {
     const ids = new Set<string>();
     dimensions[p.id] = array(sourceDimensions[p.id], 5000, 'part dimensions').map((value) => {
       const parsed = dimension(value, budget);
+      if (!p.views.some((view) => view.id === parsed.viewId))
+        return invalid('a dimension refers to a missing projection.');
       uniqueId(parsed.id, ids, 'dimension ID');
       return parsed;
     });
@@ -379,10 +450,41 @@ export function parseProject(text: string): ProjectData {
     if (!seenParts.has(id)) return invalid('drawing layouts refer to an unknown part.');
     layouts[id] = layout(value);
   }
-  return { parts, dimensions, layouts, selected, settings: settings(data.settings) };
+  const sourceAnnotations =
+    data.annotations === undefined ? {} : record(data.annotations, 'annotations');
+  if (Object.keys(sourceAnnotations).some((id) => !seenParts.has(id)))
+    return invalid('annotations refer to an unknown part.');
+  const annotations = Object.create(null) as Record<string, DrawingAnnotation[]>;
+  let annotationCount = 0;
+  for (const p of parts) {
+    const ids = new Set<string>();
+    annotations[p.id] = array(sourceAnnotations[p.id] ?? [], 10000, 'part annotations').map(
+      (value) => {
+        if (++annotationCount > 100000) return invalid('annotations exceed the project limit.');
+        const parsed = annotation(value, budget);
+        uniqueId(parsed.id, ids, 'annotation ID');
+        return parsed;
+      },
+    );
+  }
+  return {
+    parts,
+    dimensions,
+    layouts,
+    annotations,
+    description:
+      data.description === undefined ? '' : string(data.description, 'project description', 100000),
+    selected,
+    settings: settings(data.settings),
+  };
 }
 
-export function serializeProject(state: WorkspaceState): string {
+export function serializeProject(
+  state: WorkspaceState & {
+    annotations?: Record<string, DrawingAnnotation[]>;
+    description?: string;
+  },
+): string {
   const result = {
     version: 1,
     parts: state.parts,
@@ -390,6 +492,8 @@ export function serializeProject(state: WorkspaceState): string {
     dimensions: state.dimensions,
     layouts: state.layouts,
     settings: state.settings,
+    annotations: state.annotations ?? {},
+    description: state.description ?? '',
   };
   // Saving and opening share one contract, so a saved workspace always reopens safely.
   const validated = parseProject(JSON.stringify(result));

@@ -59,7 +59,7 @@ export interface ProjectionMetrics {
   caption: { text: string; origin: Point2 };
 }
 export interface CalculatedDrawingLayout extends DrawingLayout {
-  arrangement: 'four-view-grid' | 'isometric-outboard';
+  arrangement: 'four-view-grid' | 'isometric-outboard' | 'single-view';
   fits: boolean;
   page: DrawingPage;
   metrics: Record<ViewId, ProjectionMetrics>;
@@ -186,6 +186,30 @@ function calculateAtScale(
   const metrics = Object.fromEntries(
     part.views.map((view) => [view.id, projectionMetrics(view, dimensions, scale, settings)]),
   ) as Record<ViewId, ProjectionMetrics>;
+  if (part.views.length === 1 && part.views[0].id === 'front') {
+    const bounds = metrics.front.occupied,
+      area = page.fittingArea;
+    const transform = {
+      x: (area.minX + area.maxX - bounds.minX - bounds.maxX) / 2,
+      y: (area.minY + area.maxY - bounds.minY - bounds.maxY) / 2,
+      scale,
+    };
+    return {
+      arrangement: 'single-view',
+      scale,
+      page,
+      metrics,
+      requiredWidth: widthOf(bounds),
+      requiredHeight: heightOf(bounds),
+      fits: widthOf(bounds) <= widthOf(area) && heightOf(bounds) <= heightOf(area),
+      viewTransforms: {
+        front: transform,
+        top: { ...transform },
+        right: { ...transform },
+        iso: { ...transform },
+      },
+    };
+  }
   if (!metrics.front || !metrics.top || !metrics.right || !metrics.iso)
     throw new Error('A drawing requires front, top, right and isometric projections.');
   const front = metrics.front.occupied,

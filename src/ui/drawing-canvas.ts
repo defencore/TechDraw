@@ -1,7 +1,9 @@
-import { isGridSpacing } from '../drawing/grid-coordinates';
+import { isGridSpacing, snapCoordinate } from '../drawing/grid-coordinates';
 import type {
   Dimension,
   DimensionKind,
+  DrawingAnnotation,
+  Bounds2,
   DrawingLayout,
   DrawingSettings,
   Part,
@@ -16,6 +18,18 @@ import { pickDimension } from './dimension-picking';
 import { nearestPointOnEdge, pickGeometry, type GeometryPick } from './geometry-picking';
 import { drawingPage } from '../drawing/page-layout';
 import { dimensionGeometry } from '../drawing/dimension-geometry';
+import { annotationBounds, renderAnnotation, translateAnnotation } from '../drawing/annotations';
+import { applyDrawingAppearance, type DrawingAppearance } from '../drawing/appearance';
+import {
+  createAnnotation,
+  defaultAnnotationOptions,
+  extendAnnotation,
+  isAnnotationTool,
+  pickAnnotation,
+  validateAnnotationOptions,
+  type AnnotationOptions,
+  type AnnotationTool,
+} from './annotation-tools';
 import { marqueeRegion, selectMarquee } from './marquee-selection';
 import { DimensionSelection } from './dimension-selection';
 import {
@@ -39,7 +53,7 @@ import {
   type ViewportState,
 } from './viewport';
 
-export type CanvasTool = 'select' | 'box-select' | 'pan' | DimensionKind;
+export type CanvasTool = 'select' | 'box-select' | 'pan' | DimensionKind | AnnotationTool;
 export interface CanvasDocument {
   part: Part;
   dimensions: Dimension[];
@@ -47,6 +61,9 @@ export interface CanvasDocument {
   layout: DrawingLayout;
   selectedDimension?: string;
   selectedDimensionIds?: readonly string[];
+  annotations?: DrawingAnnotation[];
+  selectedAnnotation?: string;
+  appearance?: DrawingAppearance;
 }
 interface CanvasCallbacks {
   select(id?: string, additive?: boolean): void;
@@ -55,6 +72,9 @@ interface CanvasCallbacks {
   add(dimension: Dimension): void;
   edit(dimension: Dimension): void;
   editMany(dimensions: Dimension[]): void;
+  selectAnnotation(id?: string): void;
+  addAnnotation(annotation: DrawingAnnotation): void;
+  editAnnotation(annotation: DrawingAnnotation): void;
   zoom(value: number): void;
   hint(message: string): void;
   error(message: string): void;
@@ -71,6 +91,9 @@ interface PointerGesture {
   viewport?: ViewportState;
   click?: boolean;
   marquee?: { endSheet: Point2; endClient: Point2; additive: boolean };
+  annotation?: DrawingAnnotation;
+  annotationPreview?: DrawingAnnotation;
+  creatingAnnotation?: boolean;
 }
 
 /** Owns only screen interaction. Model measurements and paper layout never depend on zoom. */
@@ -91,6 +114,8 @@ export class DrawingCanvas {
   private space = false;
   private pointerClient?: Point2;
   private enabled = true;
+  private readOnly = false;
+  private annotationOptions = { ...defaultAnnotationOptions };
   private grid = { ...defaultGridSettings };
   private touches = new Map<number, Point2>();
   private pinch?: { distance: number; midpoint: Point2; viewport: ViewportState };
@@ -116,7 +141,12 @@ export class DrawingCanvas {
     });
     element.addEventListener('wheel', this.wheel, { passive: false });
     element.addEventListener('dblclick', (event) => {
-      if (this.enabled && this.document && this.tool === 'select' && !this.dimensionAt(event)) {
+      if (
+        this.enabled &&
+        this.document &&
+        (this.readOnly ||
+          (this.tool === 'select' && !this.dimensionAt(event) && !this.annotationAt(event)))
+      ) {
         event.preventDefault();
         this.setZoom(this.viewport.zoom * 2, this.local(event));
       }
@@ -149,8 +179,9 @@ export class DrawingCanvas {
       document.part,
       document.dimensions,
       document.settings,
-      document.selectedDimension,
+      this.readOnly ? undefined : document.selectedDimension,
       document.layout,
+      { annotations: document.annotations, appearance: document.appearance },
     );
     const host = this.element?.querySelector<HTMLElement>('#paper-host');
     if (host) {
@@ -159,6 +190,7 @@ export class DrawingCanvas {
       this.element!.classList.add('has-sheet');
       this.applyViewport();
       this.patchSelections();
+      this.patchAnnotations();
       this.feedback();
     }
     this.hint();
@@ -168,6 +200,17 @@ export class DrawingCanvas {
   setEnabled(value: boolean): void {
     this.enabled = value;
     if (!value) this.cancel();
+  }
+  setReadOnly(value: boolean): void {
+    if (this.readOnly !== value) this.cancel();
+    this.readOnly = value;
+    this.element?.classList.toggle('viewer-mode', value);
+    this.patchSelections();
+    this.patchAnnotations();
+    this.hint();
+  }
+  setAnnotationOptions(options: AnnotationOptions): void {
+    this.annotationOptions = validateAnnotationOptions(options);
   }
   setGrid(settings: GridSettings): void {
     if (
@@ -206,7 +249,8 @@ export class DrawingCanvas {
       : undefined;
   }
   fit(): void {
-    if (this.gesture?.dimension || this.gesture?.marquee || this.pinch) return;
+    if (this.gesture?.dimension || this.gesture?.annotation || this.gesture?.marquee || this.pinch)
+      return;
     this.viewport = fitViewport();
     this.applyViewport(false);
     this.rebasePan();
@@ -217,27 +261,13 @@ export class DrawingCanvas {
       !this.sheet ||
       !this.metrics ||
       this.gesture?.dimension ||
+      this.gesture?.annotation ||
       this.gesture?.marquee ||
       this.pinch
     )
       return false;
-    const selected = this.selectedIds();
-    const geometries = this.document.dimensions
-      .filter((dimension) => selected.has(dimension.id))
-      .map((dimension) =>
-        dimensionGeometry(
-          dimension,
-          this.sheet!.viewTransforms[dimension.viewId],
-          this.document!.settings.precision,
-        ),
-      );
-    if (!geometries.length) return false;
-    const bounds = {
-      minX: Math.min(...geometries.map(({ bounds }) => bounds.minX)),
-      maxX: Math.max(...geometries.map(({ bounds }) => bounds.maxX)),
-      minY: Math.min(...geometries.map(({ bounds }) => bounds.minY)),
-      maxY: Math.max(...geometries.map(({ bounds }) => bounds.maxY)),
-    };
+    const bounds = this.getSelectionPaperBounds();
+    if (!bounds) return false;
     const baseScale = getViewportTransform(fitViewport(), this.metrics).scale;
     const area = viewportSafeArea(this.metrics);
     const pixelsPerMillimetre = Math.min(
@@ -257,11 +287,55 @@ export class DrawingCanvas {
     this.rebasePan();
     return true;
   }
+  getSelectionPaperBounds(): Bounds2 | undefined {
+    if (!this.document || !this.sheet) return;
+    const selected = this.selectedIds();
+    const bounds = this.document.dimensions
+      .filter((d) => selected.has(d.id))
+      .map(
+        (d) =>
+          dimensionGeometry(
+            d,
+            this.sheet!.viewTransforms[d.viewId],
+            this.document!.settings.precision,
+          ).bounds,
+      );
+    const annotation = this.document.annotations?.find(
+      (item) => item.id === this.document!.selectedAnnotation,
+    );
+    if (annotation) bounds.push(annotationBounds(annotation));
+    if (!bounds.length) return;
+    return {
+      minX: Math.min(...bounds.map((b) => b.minX)),
+      minY: Math.min(...bounds.map((b) => b.minY)),
+      maxX: Math.max(...bounds.map((b) => b.maxX)),
+      maxY: Math.max(...bounds.map((b) => b.maxY)),
+    };
+  }
+  getVisiblePaperBounds(): Bounds2 | undefined {
+    if (!this.sheet || !this.metrics) return;
+    const a = toSheet([0, 0], this.viewport, this.metrics);
+    const b = toSheet([this.metrics.width, this.metrics.height], this.viewport, this.metrics);
+    const bounds = {
+      minX: Math.max(0, a[0]),
+      minY: Math.max(0, a[1]),
+      maxX: Math.min(this.sheet.width, b[0]),
+      maxY: Math.min(this.sheet.height, b[1]),
+    };
+    return bounds.maxX > bounds.minX && bounds.maxY > bounds.minY ? bounds : undefined;
+  }
   zoomBy(factor: number): void {
     this.setZoom(this.viewport.zoom * factor);
   }
   setZoom(value: number, anchor?: Point2): void {
-    if (!this.metrics || this.gesture?.dimension || this.gesture?.marquee || this.pinch) return;
+    if (
+      !this.metrics ||
+      this.gesture?.dimension ||
+      this.gesture?.annotation ||
+      this.gesture?.marquee ||
+      this.pinch
+    )
+      return;
     const area = viewportSafeArea(this.metrics);
     this.viewport = zoomAt(
       this.viewport,
@@ -322,7 +396,13 @@ export class DrawingCanvas {
         this.metrics.insets?.bottom !== metrics.insets?.bottom),
     );
     if (resized && this.metrics) {
-      if (this.gesture?.dimension || this.gesture?.marquee || this.pinch) this.cancel();
+      if (
+        this.gesture?.dimension ||
+        this.gesture?.annotation ||
+        this.gesture?.marquee ||
+        this.pinch
+      )
+        this.cancel();
       this.viewport = resizeViewport(this.viewport, this.metrics, metrics);
     }
     this.metrics = metrics;
@@ -354,10 +434,13 @@ export class DrawingCanvas {
       // The page background stays opaque; the grid sits behind all drawing primitives.
       svg.insertBefore(overlay, svg.querySelector(':scope > g'));
     }
-    overlay.innerHTML = renderWorkspaceGrid(
-      drawingPage(this.document.settings).content,
-      this.grid,
-      getViewportTransform(this.viewport, this.metrics).scale,
+    overlay.innerHTML = applyDrawingAppearance(
+      renderWorkspaceGrid(
+        drawingPage(this.document.settings).content,
+        this.grid,
+        getViewportTransform(this.viewport, this.metrics).scale,
+      ),
+      this.document.appearance,
     );
   }
   private local(event: { clientX: number; clientY: number }): Point2 {
@@ -370,6 +453,15 @@ export class DrawingCanvas {
   private dimensionAt(event: { clientX: number; clientY: number }): string | undefined {
     const svg = this.element?.querySelector<SVGSVGElement>('#paper-host > svg');
     return svg ? pickDimension(svg, [event.clientX, event.clientY]) : undefined;
+  }
+  private annotationAt(event: { clientX: number; clientY: number }): DrawingAnnotation | undefined {
+    if (!this.document || !this.metrics) return;
+    const id = pickAnnotation(
+      this.document.annotations ?? [],
+      this.sheetPoint(event),
+      getViewportTransform(this.viewport, this.metrics).scale,
+    );
+    return this.document.annotations?.find((annotation) => annotation.id === id);
   }
   private geometryAt(event: { clientX: number; clientY: number }): GeometryPick | undefined {
     if (!this.document || !this.sheet || !this.metrics) return;
@@ -414,8 +506,12 @@ export class DrawingCanvas {
         return;
       }
     }
+    const annotation =
+      !this.readOnly && this.tool === 'select' && !this.space && event.button === 0
+        ? this.annotationAt(event)
+        : undefined;
     const id =
-      this.tool === 'select' && !this.space && event.button === 0
+      !this.readOnly && !annotation && this.tool === 'select' && !this.space && event.button === 0
         ? this.dimensionAt(event)
         : undefined;
     const dimension = id ? this.document.dimensions.find((d) => d.id === id) : undefined;
@@ -429,38 +525,61 @@ export class DrawingCanvas {
       selected = this.selectedIds();
     }
     const pan =
+      this.readOnly ||
       this.space ||
       this.tool === 'pan' ||
       event.button === 1 ||
-      (this.tool === 'select' && !dimension);
+      (this.tool === 'select' && !dimension && !annotation);
     const box = this.tool === 'box-select' && !pan;
     const sheetPoint = this.sheetPoint(event);
+    let created: DrawingAnnotation | undefined;
+    if (!pan && isAnnotationTool(this.tool)) {
+      try {
+        created = createAnnotation(
+          this.tool,
+          this.annotationPoint(event, this.tool === 'freehand'),
+          this.annotationOptions,
+        );
+      } catch (error) {
+        this.callbacks.error(error instanceof Error ? error.message : String(error));
+        event.preventDefault();
+        return;
+      }
+    }
+    if (annotation) this.selectAnnotation(annotation.id);
     this.gesture = {
       pointerId: event.pointerId,
       startClient: [event.clientX, event.clientY],
       startSheet: sheetPoint,
       moved: false,
-      ...(dimension
+      ...(annotation || created
         ? {
-            dimension: structuredClone(dimension),
-            dimensions: structuredClone(
-              this.document.dimensions.filter((item) => selected.has(item.id)),
-            ),
+            annotation: structuredClone(annotation ?? created!),
+            annotationPreview: structuredClone(annotation ?? created!),
+            creatingAnnotation: Boolean(created),
           }
-        : box
+        : dimension
           ? {
-              marquee: {
-                endSheet: sheetPoint,
-                endClient: [event.clientX, event.clientY],
-                additive: event.ctrlKey || event.metaKey || event.shiftKey,
-              },
+              dimension: structuredClone(dimension),
+              dimensions: structuredClone(
+                this.document.dimensions.filter((item) => selected.has(item.id)),
+              ),
             }
-          : pan
-            ? { viewport: structuredClone(this.viewport) }
-            : { click: true }),
+          : box
+            ? {
+                marquee: {
+                  endSheet: sheetPoint,
+                  endClient: [event.clientX, event.clientY],
+                  additive: event.ctrlKey || event.metaKey || event.shiftKey,
+                },
+              }
+            : pan
+              ? { viewport: structuredClone(this.viewport) }
+              : { click: true }),
     };
     this.element.setPointerCapture(event.pointerId);
     event.preventDefault();
+    if (created) this.patchAnnotation(created, true);
     if (dimension) {
       this.element.classList.add('dimension-dragging');
     } else if (pan) this.element.classList.add('panning');
@@ -500,11 +619,14 @@ export class DrawingCanvas {
         gesture.marquee.endSheet = this.sheetPoint(event);
         gesture.marquee.endClient = [event.clientX, event.clientY];
         this.marqueeFeedback();
+      } else if (gesture.annotation) {
+        this.previewAnnotation(gesture, event);
       } else if (gesture.dimension && this.sheet) {
         this.previewDrag(gesture, event);
       }
       return;
     }
+    if (this.readOnly || isAnnotationTool(this.tool)) return;
     if (this.draft && this.sheet) {
       this.draft = this.positionDraft(this.draft, event);
       this.scheduleFeedback();
@@ -546,7 +668,26 @@ export class DrawingCanvas {
       this.element.releasePointerCapture(event.pointerId);
     this.element?.classList.remove('panning', 'dimension-dragging');
     this.marqueeFeedback();
-    if (gesture.marquee && gesture.moved && this.document && this.sheet) {
+    if (gesture.annotation && this.document) {
+      if (gesture.moved) this.previewAnnotation(gesture, event);
+      const next = gesture.annotationPreview ?? gesture.annotation;
+      if (
+        (!gesture.creatingAnnotation && !gesture.moved) ||
+        (gesture.creatingAnnotation && next.kind !== 'text' && !gesture.moved)
+      ) {
+        this.restoreGesture(gesture);
+        return;
+      }
+      if (this.annotationFits(next) && this.annotationVisible(next)) {
+        if (gesture.creatingAnnotation) this.callbacks.addAnnotation(next);
+        else this.callbacks.editAnnotation(next);
+      } else {
+        this.restoreGesture(gesture);
+        this.callbacks.error(
+          'Keep the annotation inside the sheet and give graphics a visible size.',
+        );
+      }
+    } else if (gesture.marquee && gesture.moved && this.document && this.sheet) {
       const ids = selectMarquee(
         this.document.dimensions.map((dimension) => ({
           id: dimension.id,
@@ -564,6 +705,7 @@ export class DrawingCanvas {
       this.document = {
         ...this.document,
         selectedDimensionIds: [...selected],
+        selectedAnnotation: undefined,
         selectedDimension:
           ids.at(-1) ??
           (selected.has(this.document.selectedDimension ?? '')
@@ -572,6 +714,7 @@ export class DrawingCanvas {
       };
       this.callbacks.selectMany(ids, gesture.marquee.additive);
       this.patchSelections();
+      this.patchAnnotations();
     } else if (gesture.dimension && gesture.moved && gesture.preview) {
       this.previewDrag(gesture, event);
       const previews = gesture.previews ?? [gesture.preview];
@@ -588,6 +731,7 @@ export class DrawingCanvas {
     else if (
       gesture.viewport &&
       !gesture.moved &&
+      !this.readOnly &&
       this.tool === 'select' &&
       !this.space &&
       event.button === 0
@@ -598,9 +742,11 @@ export class DrawingCanvas {
         ...this.document!,
         selectedDimension: undefined,
         selectedDimensionIds: [],
+        selectedAnnotation: undefined,
       };
       this.callbacks.select(undefined, false);
       this.patchSelections();
+      this.patchAnnotations();
     }
   };
   private pointerCancel = (event: PointerEvent): void => {
@@ -615,7 +761,7 @@ export class DrawingCanvas {
   private wheel = (event: WheelEvent): void => {
     if (!this.enabled || !this.document || !this.metrics) return;
     event.preventDefault();
-    if (this.gesture?.dimension || this.gesture?.marquee) return;
+    if (this.gesture?.dimension || this.gesture?.annotation || this.gesture?.marquee) return;
     const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? this.metrics.height : 1;
     if (event.shiftKey && !event.ctrlKey) {
       this.viewport = panViewport(this.viewport, [-(event.deltaX || event.deltaY) * unit, 0]);
@@ -631,7 +777,13 @@ export class DrawingCanvas {
   private contextMenu = (event: MouseEvent): void => {
     if (!this.enabled || !this.document) return;
     event.preventDefault();
-    if (this.space || this.tool === 'pan' || this.gesture || this.pinch) return;
+    if (this.readOnly || this.space || this.tool === 'pan' || this.gesture || this.pinch) return;
+    const annotation = this.annotationAt(event);
+    if (annotation) {
+      this.selectAnnotation(annotation.id);
+      this.callbacks.contextMenu({ clientX: event.clientX, clientY: event.clientY });
+      return;
+    }
     const id = this.dimensionAt(event);
     if (id && this.document.dimensions.some((dimension) => dimension.id === id))
       this.selectDimension(id);
@@ -774,6 +926,93 @@ export class DrawingCanvas {
   private restoreGesture(gesture?: PointerGesture): void {
     for (const dimension of gesture?.dimensions ?? (gesture?.dimension ? [gesture.dimension] : []))
       this.patchDimension(dimension);
+    if (gesture?.annotation) {
+      if (gesture.creatingAnnotation) this.removeAnnotationPreview(gesture.annotation.id);
+      else this.patchAnnotation(gesture.annotation);
+    }
+  }
+
+  private annotationPoint(event: PointerEvent, freehand = false): Point2 {
+    const point = this.sheetPoint(event);
+    return !freehand && this.grid.snap && !event.altKey
+      ? [snapCoordinate(point[0], this.grid.spacing), snapCoordinate(point[1], this.grid.spacing)]
+      : point;
+  }
+  private previewAnnotation(gesture: PointerGesture, event: PointerEvent): void {
+    const original = gesture.annotation!;
+    if (gesture.creatingAnnotation) {
+      const point = this.annotationPoint(event, original.kind === 'freehand');
+      gesture.annotationPreview =
+        original.kind === 'text'
+          ? { ...original, points: [point] }
+          : extendAnnotation(gesture.annotationPreview ?? original, point);
+    } else {
+      const point = this.sheetPoint(event);
+      let delta: Point2 = [point[0] - gesture.startSheet[0], point[1] - gesture.startSheet[1]];
+      if (this.grid.snap && !event.altKey)
+        delta = [
+          snapCoordinate(original.points[0][0] + delta[0], this.grid.spacing) -
+            original.points[0][0],
+          snapCoordinate(original.points[0][1] + delta[1], this.grid.spacing) -
+            original.points[0][1],
+        ];
+      gesture.annotationPreview = translateAnnotation(original, delta);
+    }
+    this.patchAnnotation(gesture.annotationPreview, true);
+  }
+  private annotationFits(annotation: DrawingAnnotation): boolean {
+    if (!this.sheet) return false;
+    const b = annotationBounds(annotation);
+    return b.minX >= 0 && b.minY >= 0 && b.maxX <= this.sheet.width && b.maxY <= this.sheet.height;
+  }
+  private annotationVisible(annotation: DrawingAnnotation): boolean {
+    if (annotation.kind === 'text') return Boolean(annotation.text?.trim());
+    if (annotation.kind === 'rectangle' || annotation.kind === 'ellipse') {
+      const a = annotation.points[0],
+        b = annotation.points.at(-1)!;
+      return Math.abs(b[0] - a[0]) >= 0.1 && Math.abs(b[1] - a[1]) >= 0.1;
+    }
+    return annotation.points.some(
+      (point) =>
+        Math.hypot(point[0] - annotation.points[0][0], point[1] - annotation.points[0][1]) >= 0.1,
+    );
+  }
+  private selectAnnotation(id: string): void {
+    if (!this.document) return;
+    this.document = {
+      ...this.document,
+      selectedAnnotation: id,
+      selectedDimension: undefined,
+      selectedDimensionIds: [],
+    };
+    this.callbacks.selectAnnotation(id);
+    this.patchSelections();
+    this.patchAnnotations();
+  }
+  private annotationElement(id: string): SVGGElement | undefined {
+    return [...(this.element?.querySelectorAll<SVGGElement>('[data-annotation-id]') ?? [])].find(
+      (group) => group.dataset.annotationId === id,
+    );
+  }
+  private removeAnnotationPreview(id: string): void {
+    this.annotationElement(id)?.remove();
+  }
+  private patchAnnotation(annotation: DrawingAnnotation, preview = false): void {
+    if (!this.document) return;
+    const markup = renderAnnotation(
+      annotation,
+      !this.readOnly && (preview || annotation.id === this.document.selectedAnnotation),
+      this.document.appearance,
+    );
+    const existing = this.annotationElement(annotation.id);
+    if (existing) existing.outerHTML = markup;
+    else
+      this.element
+        ?.querySelector<SVGGElement>('[data-review-annotations]')
+        ?.insertAdjacentHTML('beforeend', markup);
+  }
+  private patchAnnotations(): void {
+    for (const annotation of this.document?.annotations ?? []) this.patchAnnotation(annotation);
   }
 
   private selectedIds(): Set<string> {
@@ -791,9 +1030,11 @@ export class DrawingCanvas {
       ...this.document,
       selectedDimension: selection.focus,
       selectedDimensionIds: [...selection.ids],
+      selectedAnnotation: undefined,
     };
     this.callbacks.select(id, additive);
     this.patchSelections();
+    this.patchAnnotations();
     return selection.ids.has(id);
   }
 
@@ -835,7 +1076,8 @@ export class DrawingCanvas {
         dimension,
         this.sheet.viewTransforms[dimension.viewId],
         this.document.settings.precision,
-        this.selectedIds().has(dimension.id),
+        !this.readOnly && this.selectedIds().has(dimension.id),
+        this.document.appearance,
       );
   }
   private dimensionFits(dimension: Dimension): boolean {
@@ -896,36 +1138,44 @@ export class DrawingCanvas {
           return `${i ? 'L' : 'M'}${p[0]},${p[1]}`;
         })
         .join(' ')}" fill="none" stroke="#16745e" stroke-width="${2.5 / px}"/>`;
-    overlay.innerHTML =
+    overlay.innerHTML = applyDrawingAppearance(
       (this.hovered?.anchor
         ? marker(this.hovered.anchor.point, this.hovered.viewId, false)
         : this.hovered?.edge
           ? edgeHighlight(this.hovered.edge, this.hovered.viewId)
           : '') +
-      (this.pendingPoint ? marker(this.pendingPoint.point, this.pendingPoint.viewId, true) : '') +
-      (this.pendingEdge ? edgeHighlight(this.pendingEdge.edge, this.pendingEdge.viewId) : '') +
-      (this.draft
-        ? `<g opacity=".8">${renderDimension(this.draft, this.sheet.viewTransforms[this.draft.viewId], this.document!.settings.precision, true)}</g>`
-        : '');
+        (this.pendingPoint ? marker(this.pendingPoint.point, this.pendingPoint.viewId, true) : '') +
+        (this.pendingEdge ? edgeHighlight(this.pendingEdge.edge, this.pendingEdge.viewId) : '') +
+        (this.draft
+          ? `<g opacity=".8">${renderDimension(this.draft, this.sheet.viewTransforms[this.draft.viewId], this.document!.settings.precision, true)}</g>`
+          : ''),
+      this.document!.appearance,
+    );
   }
   private hint(): void {
-    const message = this.draft
-      ? 'Click to place the dimension · Esc to cancel · Wheel to zoom'
-      : this.tool === 'pan'
-        ? 'Drag to pan · Wheel to zoom under the cursor · Fit to show the sheet'
-        : this.tool === 'box-select'
-          ? 'Drag right to contain dimensions · Drag left to cross dimensions · Shift / Ctrl adds to selection'
-          : this.tool === 'select'
-            ? 'Drag dimensions to move them · Shift / Ctrl-click to select a group · Wheel to zoom · Space + drag to pan'
-            : this.tool === 'angle'
-              ? this.pendingEdge
-                ? 'Choose the second straight edge in the same view'
-                : 'Choose two straight edges, then click to place the angle'
-              : this.tool === 'diameter' || this.tool === 'radius'
-                ? 'Choose a circular edge, then click to place the dimension'
-                : this.pendingPoint
-                  ? 'Choose the second snap point in the same view'
-                  : 'Choose a straight edge or two snap points, then click to place the dimension';
+    const message = this.readOnly
+      ? 'Drag to pan · Pinch or wheel to zoom · Fit to show the sheet'
+      : isAnnotationTool(this.tool)
+        ? this.tool === 'text'
+          ? 'Enter text in the annotation panel, then click the sheet to place it'
+          : 'Drag on the sheet to draw · Select an annotation to move or edit it · Esc to cancel'
+        : this.draft
+          ? 'Click to place the dimension · Esc to cancel · Wheel to zoom'
+          : this.tool === 'pan'
+            ? 'Drag to pan · Wheel to zoom under the cursor · Fit to show the sheet'
+            : this.tool === 'box-select'
+              ? 'Drag right to contain dimensions · Drag left to cross dimensions · Shift / Ctrl adds to selection'
+              : this.tool === 'select'
+                ? 'Drag dimensions to move them · Shift / Ctrl-click to select a group · Wheel to zoom · Space + drag to pan'
+                : this.tool === 'angle'
+                  ? this.pendingEdge
+                    ? 'Choose the second straight edge in the same view'
+                    : 'Choose two straight edges, then click to place the angle'
+                  : this.tool === 'diameter' || this.tool === 'radius'
+                    ? 'Choose a circular edge, then click to place the dimension'
+                    : this.pendingPoint
+                      ? 'Choose the second snap point in the same view'
+                      : 'Choose a straight edge or two snap points, then click to place the dimension';
     this.callbacks.hint(
       message +
         (this.grid.snap && this.tool !== 'pan' && this.tool !== 'box-select'

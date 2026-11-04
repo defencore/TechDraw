@@ -5,7 +5,7 @@ import { renderDrawing } from '../src/drawing/render';
 import { drawingPage } from '../src/drawing/page-layout';
 import { dimensionGeometry } from '../src/drawing/dimension-geometry';
 import { defaultSettings } from '../src/state';
-import type { Dimension, Part, Point2, Projection } from '../src/model';
+import type { Dimension, DrawingAnnotation, Part, Point2, Projection } from '../src/model';
 
 const oldResizeObserver = globalThis.ResizeObserver;
 const oldAnimationFrame = globalThis.requestAnimationFrame;
@@ -102,7 +102,11 @@ class CanvasHost {
   }
 }
 
-function fixture(dimensions: Dimension[] = [], selectedDimensionIds: string[] = []) {
+function fixture(
+  dimensions: Dimension[] = [],
+  selectedDimensionIds: string[] = [],
+  annotations: DrawingAnnotation[] = [],
+) {
   const projections: Projection[] = (['front', 'top', 'right', 'iso'] as const).map((id) => ({
     id,
     name: id,
@@ -139,7 +143,7 @@ function fixture(dimensions: Dimension[] = [], selectedDimensionIds: string[] = 
     warnings: [],
   };
   const settings = { ...defaultSettings, scale: 1 };
-  const initial = renderDrawing(part, dimensions, settings);
+  const initial = renderDrawing(part, dimensions, settings, undefined, undefined, { annotations });
   const host = new CanvasHost();
   const added: Dimension[] = [],
     errors: string[] = [],
@@ -148,7 +152,10 @@ function fixture(dimensions: Dimension[] = [], selectedDimensionIds: string[] = 
     groups: Dimension[][] = [],
     selections: { id?: string; additive?: boolean }[] = [],
     marquees: { ids: string[]; additive: boolean }[] = [],
-    contexts: { clientX: number; clientY: number; dimensionId?: string }[] = [];
+    contexts: { clientX: number; clientY: number; dimensionId?: string }[] = [],
+    addedAnnotations: DrawingAnnotation[] = [],
+    editedAnnotations: DrawingAnnotation[] = [],
+    annotationSelections: (string | undefined)[] = [];
   const canvas = new DrawingCanvas({
     select: (id, additive) => selections.push({ id, additive }),
     selectMany: (ids, additive) => marquees.push({ ids, additive }),
@@ -156,6 +163,9 @@ function fixture(dimensions: Dimension[] = [], selectedDimensionIds: string[] = 
     add: (dimension) => added.push(dimension),
     edit: (dimension) => edited.push(dimension),
     editMany: (dimensions) => groups.push(dimensions),
+    selectAnnotation: (id) => annotationSelections.push(id),
+    addAnnotation: (annotation) => addedAnnotations.push(annotation),
+    editAnnotation: (annotation) => editedAnnotations.push(annotation),
     zoom() {},
     hint: (hint) => hints.push(hint),
     error: (error) => errors.push(error),
@@ -164,6 +174,7 @@ function fixture(dimensions: Dimension[] = [], selectedDimensionIds: string[] = 
   const sheet = canvas.setDocument({
     part,
     dimensions,
+    annotations,
     settings,
     layout: { scale: initial.scale, viewTransforms: initial.viewTransforms },
     selectedDimension: selectedDimensionIds.at(-1),
@@ -193,6 +204,9 @@ function fixture(dimensions: Dimension[] = [], selectedDimensionIds: string[] = 
     selections,
     marquees,
     contexts,
+    addedAnnotations,
+    editedAnnotations,
+    annotationSelections,
   };
 }
 const near = (actual: number, expected: number) =>
@@ -648,6 +662,119 @@ test('draft placement snaps to paper millimetres and Alt places freely without c
     assert.equal(added[0].value, 100);
     assert.doesNotMatch(sheet.svg, /workspace-grid/);
   }
+});
+
+test('touch graphics draw in physical paper coordinates without panning and cancellation never commits a review', () => {
+  for (const kind of ['arrow', 'rectangle', 'ellipse', 'freehand'] as const) {
+    const { canvas, host, client, addedAnnotations } = fixture();
+    canvas.setTool(kind);
+    const start = client([20, 30]),
+      end = client([60, 70]);
+    const viewport = host.transform();
+    const touch = { pointerType: 'touch', pointerId: 12 };
+    host.dispatch('pointerdown', { ...touch, clientX: start[0], clientY: start[1] });
+    host.dispatch('pointermove', { ...touch, clientX: end[0], clientY: end[1] });
+    host.dispatch('pointerup', { ...touch, clientX: end[0], clientY: end[1] });
+    assert.equal(addedAnnotations.length, 1);
+    assert.equal(addedAnnotations[0].kind, kind);
+    near(addedAnnotations[0].points[0][0], 20);
+    near(addedAnnotations[0].points[0][1], 30);
+    near(addedAnnotations[0].points.at(-1)![0], 60);
+    near(addedAnnotations[0].points.at(-1)![1], 70);
+    assert.deepEqual(host.transform(), viewport);
+    host.dispatch('pointerdown', { ...touch, clientX: start[0], clientY: start[1] });
+    host.dispatch('pointermove', { ...touch, clientX: end[0], clientY: end[1] });
+    canvas.cancel();
+    host.dispatch('pointerup', { ...touch, clientX: end[0], clientY: end[1] });
+    assert.equal(addedAnnotations.length, 1);
+  }
+});
+
+test('text placement uses the inline editor options and moving notes preserves their complete independent geometry', () => {
+  const note: DrawingAnnotation = {
+    id: 'note',
+    kind: 'text',
+    points: [[30, 40]],
+    text: 'Check fit',
+    fontSize: 4,
+    strokeWidth: 0.35,
+  };
+  const { canvas, host, client, click, editedAnnotations, addedAnnotations } = fixture(
+    [],
+    [],
+    [note],
+  );
+  const start = client([31, 39]),
+    end = client([41, 44]);
+  host.dispatch('pointerdown', { clientX: start[0], clientY: start[1] });
+  host.dispatch('pointermove', { clientX: end[0], clientY: end[1] });
+  host.dispatch('pointerup', { clientX: end[0], clientY: end[1] });
+  assert.equal(editedAnnotations.length, 1);
+  near(editedAnnotations[0].points[0][0], 40);
+  near(editedAnnotations[0].points[0][1], 45);
+  assert.equal(editedAnnotations[0].text, 'Check fit');
+  assert.deepEqual(note.points, [[30, 40]]);
+  canvas.setAnnotationOptions({
+    text: 'Assembly note\nReview before release',
+    fontSize: 3.5,
+    strokeWidth: 0.4,
+  });
+  canvas.setTool('text');
+  canvas.setGrid({ visible: false, snap: true, spacing: 5 });
+  click(client([72.3, 83.1]));
+  assert.equal(addedAnnotations.length, 1);
+  assert.deepEqual(addedAnnotations[0].points, [[70, 85]]);
+  assert.equal(addedAnnotations[0].text, 'Assembly note\nReview before release');
+});
+
+test('read-only viewing pans over annotations without selecting, creating or editing them and exposes capture bounds', () => {
+  const note: DrawingAnnotation = {
+    id: 'note',
+    kind: 'text',
+    points: [[30, 40]],
+    text: 'Check fit',
+    fontSize: 4,
+    strokeWidth: 0.35,
+  };
+  const {
+    canvas,
+    host,
+    sheet,
+    client,
+    editedAnnotations,
+    addedAnnotations,
+    annotationSelections,
+    contexts,
+  } = fixture([], [], [note]);
+  canvas.setTool('text');
+  canvas.setReadOnly(true);
+  const before = host.transform(),
+    start = client([31, 39]);
+  host.dispatch('pointerdown', { clientX: start[0], clientY: start[1] });
+  host.dispatch('pointermove', { clientX: start[0] + 20, clientY: start[1] + 10 });
+  host.dispatch('pointerup', { clientX: start[0] + 20, clientY: start[1] + 10 });
+  near(host.transform().x, before.x + 20);
+  near(host.transform().y, before.y + 10);
+  assert.equal(editedAnnotations.length + addedAnnotations.length + annotationSelections.length, 0);
+  host.dispatch('contextmenu');
+  assert.equal(contexts.length, 0);
+  const bounds = canvas.getVisiblePaperBounds()!;
+  assert.ok(
+    bounds.minX >= 0 &&
+      bounds.minY >= 0 &&
+      bounds.maxX <= sheet.width &&
+      bounds.maxY <= sheet.height,
+  );
+  const zoom = canvas.zoom;
+  host.dispatch('wheel', { deltaY: -100 });
+  assert.ok(canvas.zoom > zoom);
+  canvas.setReadOnly(false);
+  canvas.setTool('select');
+  const point = client([31, 39]);
+  host.dispatch('pointerdown', { clientX: point[0], clientY: point[1] });
+  host.dispatch('pointerup', { clientX: point[0], clientY: point[1] });
+  const selection = canvas.getSelectionPaperBounds()!;
+  assert.ok(selection.minX < 30 && selection.maxX > 40 && selection.minY < 40);
 });
 
 test('the retained workspace grid follows zoom behind the model and never changes rendered export markup', () => {

@@ -1,7 +1,8 @@
-import type { Dimension, DimensionKind } from '../model';
+import type { Dimension, DimensionKind, ViewId } from '../model';
 import { formatDimensionLabel } from '../drawing/dimension-label';
 import { button, option } from './components';
 import { escapeHtml } from './utils';
+import { t } from './i18n';
 
 export interface DimensionFilter {
   query: string;
@@ -38,6 +39,8 @@ export function filterDimensions(
         dimension.value,
         dimension.viewId,
         dimension.kind,
+        t(dimension.viewId),
+        t(dimension.kind),
         dimension.automatic ? 'automatic' : 'manual',
       ].join(' '),
     );
@@ -66,7 +69,7 @@ export function renderDimensionResults(
         ? `<div class="dimension-list">${visible
             .map((dimension) => {
               const label = formatDimensionLabel(dimension, precision).plainText;
-              return `<div class="dimension-list-item${selected.has(dimension.id) ? ' selected' : ''}${dimension.id === focused ? ' focused' : ''}"><input type="checkbox" data-dimension-check="${escapeHtml(dimension.id)}" aria-label="Select ${escapeHtml(label)} ${dimension.viewId} ${dimension.kind}" ${selected.has(dimension.id) ? 'checked' : ''}/><button class="dimension-row${dimension.id === focused ? ' active' : ''}" data-dimension-select="${escapeHtml(dimension.id)}" aria-pressed="${selected.has(dimension.id)}"><span>${escapeHtml(label)}<small>${dimension.viewId} · ${dimension.kind}</small></span><span class="dimension-origin" title="${dimension.automatic ? 'Automatic suggestion' : 'Manual dimension'}">${dimension.automatic ? 'A' : 'M'}</span></button></div>`;
+              return `<div class="dimension-list-item${selected.has(dimension.id) ? ' selected' : ''}${dimension.id === focused ? ' focused' : ''}"><input type="checkbox" data-dimension-check="${escapeHtml(dimension.id)}" aria-label="Select ${escapeHtml(label)} ${dimension.viewId} ${dimension.kind}" ${selected.has(dimension.id) ? 'checked' : ''}/><button class="dimension-row${dimension.id === focused ? ' active' : ''}" data-dimension-select="${escapeHtml(dimension.id)}" aria-pressed="${selected.has(dimension.id)}"><span><span data-user-content>${escapeHtml(label)}</span><small>${t(dimension.viewId)} · ${t(dimension.kind)}</small></span><span class="dimension-origin" title="${dimension.automatic ? 'Automatic suggestion' : 'Manual dimension'}">${dimension.automatic ? 'A' : 'M'}</span></button></div>`;
             })
             .join('')}</div>`
         : `<div class="dimension-browser-empty"><strong>${dimensions.length ? 'No matching dimensions' : 'No dimensions yet'}</strong><p>${dimensions.length ? 'Change the search, view or type, or clear filters to show the full list.' : 'Choose a dimension tool in the drawing dock to add one.'}</p></div>`
@@ -80,10 +83,11 @@ export function renderDimensionBrowser(
   focused: string | undefined,
   filter: DimensionFilter,
   precision: number,
+  availableViews: readonly Exclude<ViewId, 'iso'>[] = ['front', 'top', 'right'],
 ): string {
   return `<section class="dimension-browser" aria-label="Dimension browser">
     <label class="field dimension-search"><span>Find dimensions</span><input id="dimension-search" type="search" value="${escapeHtml(filter.query)}" maxlength="120" placeholder="Value, tolerance or note" autocomplete="off" aria-controls="dimension-browser-results"/></label>
-    <div class="dimension-filters"><label class="field"><span>View</span><select id="dimension-filter-view" aria-controls="dimension-browser-results">${(['all', 'front', 'top', 'right'] as const).map((view) => option(view, view === 'all' ? 'All views' : view[0].toUpperCase() + view.slice(1), filter.view)).join('')}</select></label><label class="field"><span>Type</span><select id="dimension-filter-kind" aria-controls="dimension-browser-results">${(['all', 'horizontal', 'vertical', 'aligned', 'diameter', 'radius', 'angle'] as const).map((kind) => option(kind, kind === 'all' ? 'All types' : kind[0].toUpperCase() + kind.slice(1), filter.kind)).join('')}</select></label></div>
+    <div class="dimension-filters"><label class="field"><span>View</span><select id="dimension-filter-view" aria-controls="dimension-browser-results">${(['all', ...availableViews] as const).map((view) => option(view, view === 'all' ? 'All views' : view[0].toUpperCase() + view.slice(1), filter.view)).join('')}</select></label><label class="field"><span>Type</span><select id="dimension-filter-kind" aria-controls="dimension-browser-results">${(['all', 'horizontal', 'vertical', 'aligned', 'diameter', 'radius', 'angle'] as const).map((kind) => option(kind, kind === 'all' ? 'All types' : kind[0].toUpperCase() + kind.slice(1), filter.kind)).join('')}</select></label></div>
     <div id="dimension-browser-results" class="dimension-browser-results" aria-live="polite">${renderDimensionResults(dimensions, selected, focused, filter, precision)}</div>
   </section>`;
 }

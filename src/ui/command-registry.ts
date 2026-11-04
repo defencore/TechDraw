@@ -1,4 +1,5 @@
 import type { DimensionKind } from '../model';
+import { t } from './i18n';
 
 export interface CommandContext {
   busy: boolean;
@@ -16,6 +17,9 @@ export interface CommandContext {
   focusMode?: boolean;
   inspectorTab?: string;
   helpOpen?: boolean;
+  viewerMode?: boolean;
+  annotationSelection?: boolean;
+  keepAwake?: boolean;
 }
 interface CommandDefinition {
   id: string;
@@ -62,10 +66,10 @@ const dimensions = (context: CommandContext) =>
 export const commandDefinitions = [
   {
     id: 'import',
-    label: 'Import STEP files',
+    label: 'Import STEP or DXF files',
     group: 'File',
     icon: 'upload',
-    keywords: ['open', 'model', 'stp', '3d'],
+    keywords: ['open', 'model', 'step', 'stp', 'dxf', '2d', '3d'],
     disabledReason: idle,
   },
   {
@@ -105,6 +109,61 @@ export const commandDefinitions = [
     keywords: ['vector', 'download'],
     disabledReason: drawing,
   },
+  {
+    id: 'export-options',
+    label: 'Export options',
+    group: 'File',
+    icon: 'download',
+    disabledReason: drawing,
+  },
+  {
+    id: 'view-drawing',
+    label: 'View drawing',
+    group: 'Navigation',
+    icon: 'expand',
+    disabledReason: drawing,
+    active: (context: CommandContext) => !!context.viewerMode,
+  },
+  { id: 'exit-viewer', label: 'Exit viewer', group: 'Navigation', icon: 'close', hidden: true },
+  {
+    id: 'toggle-wake-lock',
+    label: 'Keep screen awake',
+    group: 'Workspace',
+    icon: 'sun',
+    disabledReason: drawing,
+    active: (context: CommandContext) => !!context.keepAwake,
+  },
+  {
+    id: 'share-drawing',
+    label: 'Share drawing',
+    group: 'File',
+    icon: 'share',
+    disabledReason: drawing,
+  },
+  {
+    id: 'capture-region',
+    label: 'Capture region',
+    group: 'File',
+    icon: 'crop',
+    disabledReason: drawing,
+  },
+  ...(
+    [
+      ['text', 'Add text', 'text'],
+      ['arrow', 'Add arrow', 'arrow'],
+      ['rectangle', 'Add rectangle', 'rectangle'],
+      ['ellipse', 'Add ellipse', 'ellipse'],
+      ['freehand', 'Draw freehand', 'freehand'],
+    ] as const
+  ).map(([tool, label, icon]) => ({
+    id: `tool:${tool}` as const,
+    label,
+    group: 'Markup',
+    icon,
+    disabledReason: drawing,
+    active: (context: CommandContext) => context.tool === tool,
+  })),
+  { id: 'demo-dxf', label: 'Load DXF example', group: 'File', icon: 'file', disabledReason: idle },
   {
     id: 'demo',
     label: 'Load example parts',
@@ -369,6 +428,13 @@ export const commandDefinitions = [
     active: (context: CommandContext) => context.inspectorTab === 'dimensions',
   },
   {
+    id: 'tab:annotations',
+    label: 'Open markup tools',
+    group: 'Panels',
+    icon: 'text',
+    active: (context: CommandContext) => context.inspectorTab === 'annotations',
+  },
+  {
     id: 'toggle-focus-mode',
     label: 'Toggle drawing focus mode',
     group: 'Workspace',
@@ -445,15 +511,51 @@ export interface Command {
   allowWhenEditing?: boolean;
 }
 
+const viewerCommands = new Set<string>([
+  'exit-viewer',
+  'toggle-wake-lock',
+  'share-drawing',
+  'capture-region',
+  'export-options',
+  'export-pdf',
+  'export-svg',
+  'zoom-in',
+  'zoom-out',
+  'fit',
+  'theme',
+  'command-palette',
+  'tool:pan',
+  'tool:select',
+]);
+
 export function getCommands(context: CommandContext): Command[] {
   return commandDefinitions.map((definition: CommandDefinition) => {
     const { disabledReason: disabled, active, ...metadata } = definition;
-    const disabledReason = disabled?.(context);
+    const annotationLabel = context.annotationSelection
+      ? (
+          {
+            'delete-selected-dimensions': 'Delete annotation',
+            'fit-selection': 'Fit selected annotation',
+            'edit-dimension': 'Edit annotation',
+          } as Record<string, string>
+        )[definition.id]
+      : undefined;
+    const disabledReason =
+      context.viewerMode && !viewerCommands.has(definition.id)
+        ? 'Exit viewer to edit the drawing.'
+        : definition.id === 'toggle-wake-lock' && !context.viewerMode
+          ? 'Open drawing viewer first.'
+          : annotationLabel
+            ? drawing(context)
+            : disabled?.(context);
     return {
       ...metadata,
+      label: t(annotationLabel ?? metadata.label),
+      group: t(metadata.group),
+      ...(definition.id === 'exit-viewer' ? { hidden: !context.viewerMode } : {}),
       id: definition.id as CommandId,
       enabled: !disabledReason,
-      ...(disabledReason ? { disabledReason } : {}),
+      ...(disabledReason ? { disabledReason: t(disabledReason) } : {}),
       ...(active ? { active: active(context) } : {}),
     };
   });

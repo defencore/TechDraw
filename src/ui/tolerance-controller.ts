@@ -2,6 +2,7 @@ import type { Dimension, DimensionTolerance } from '../model';
 import { formatDimension } from '../drawing/dimensions';
 import { normalizeToleranceNumber, parseDimensionTolerance } from '../drawing/tolerances';
 import { renderToleranceFields, type ToleranceMode } from './tolerance-editor';
+import { localizeUi, t } from './i18n';
 
 export type ToleranceField = 'magnitude' | 'upper' | 'lower' | 'designation';
 export interface ToleranceSelection {
@@ -102,6 +103,7 @@ export class ToleranceEditorController {
     const apply = root.querySelector<HTMLButtonElement>('[data-action="apply-tolerance"]');
     if (apply) apply.disabled = draft.mode === 'none' && !selection.dimension.tolerance;
     this.updatePreview();
+    localizeUi(root);
   }
 
   setMode(mode: ToleranceMode): void {
@@ -162,9 +164,11 @@ export class ToleranceEditorController {
     if (!preview) return;
     try {
       const tolerance = this.parse(selection);
-      preview.textContent = `Preview: ${formatDimension({ ...selection.dimension, tolerance }, this.context.precision())}`;
+      preview.textContent = t(
+        `Preview: ${formatDimension({ ...selection.dimension, tolerance }, this.context.precision())}`,
+      );
     } catch {
-      preview.textContent = 'Enter the tolerance values, then choose Apply tolerance.';
+      preview.textContent = t('Enter the tolerance values, then choose Apply tolerance.');
     }
   }
 
@@ -183,7 +187,7 @@ export class ToleranceEditorController {
       const message = error instanceof Error ? error.message : String(error);
       const label = this.root?.querySelector<HTMLElement>('#tolerance-error');
       if (label) {
-        label.textContent = message;
+        label.textContent = t(message);
         label.hidden = false;
       } else this.context.reportError(message);
     }

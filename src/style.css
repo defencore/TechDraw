@@ -14,6 +14,15 @@
   src: url('@fontsource-variable/manrope/files/manrope-latin-wght-normal.woff2')
     format('woff2-variations');
 }
+@font-face {
+  font-family: Manrope;
+  font-style: normal;
+  font-weight: 200 800;
+  font-display: swap;
+  src: url('@fontsource-variable/manrope/files/manrope-cyrillic-wght-normal.woff2')
+    format('woff2-variations');
+  unicode-range: U+0400-052F, U+1C80-1C8A, U+2DE0-2DFF, U+A640-A69F;
+}
 
 :root {
   font-family:
@@ -22,38 +31,46 @@
     BlinkMacSystemFont,
     'Segoe UI',
     sans-serif;
-  color: #293532;
-  background: #f5f6f4;
+  color: #243349;
+  background: #f3f6fb;
   font-synthesis: none;
   font-size: 13px;
   --surface: #fff;
-  --surface-subtle: #f8f9f7;
-  --canvas: #eef0ed;
-  --border: #e4e8e2;
-  --ink: #283530;
-  --muted: #7c867e;
-  --accent: #245d4c;
-  --accent-hover: #184c3d;
-  --accent-soft: #eaf2ec;
-  --shadow: 0 8px 32px #28352c0c;
-  --dot: #d5dcd4;
+  --surface-subtle: #f6f8fc;
+  --canvas: #eaf0f7;
+  --border: #dce4ef;
+  --ink: #243349;
+  --muted: #65758d;
+  --accent: #1668b8;
+  --accent-hover: #0c4f94;
+  --accent-soft: #e8f2ff;
+  --shadow: 0 8px 32px #182f5110;
+  --dot: #cbd8e8;
   color-scheme: light;
 }
 :root[data-theme='dark'] {
-  --surface: #1b2421;
-  --surface-subtle: #202a26;
-  --canvas: #141c19;
-  --border: #344139;
-  --ink: #e1e9e2;
-  --muted: #93a298;
-  --accent: #b0d4ba;
-  --accent-hover: #c8e7cf;
-  --accent-soft: #2b4235;
-  --shadow: 0 8px 32px #0003;
-  --dot: #2a372f;
-  background: #141c19;
+  --surface: #111d30;
+  --surface-subtle: #17253b;
+  --canvas: #091321;
+  --border: #2a3b54;
+  --ink: #e4edf9;
+  --muted: #9aaec9;
+  --accent: #67c9ff;
+  --accent-hover: #a1ddff;
+  --accent-soft: #193a56;
+  --shadow: 0 8px 32px #0005;
+  --dot: #263b56;
+  background: #091321;
   color: var(--ink);
   color-scheme: dark;
+}
+:root[lang='uk'] {
+  font-family:
+    Manrope,
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    sans-serif;
 }
 * {
   box-sizing: border-box;

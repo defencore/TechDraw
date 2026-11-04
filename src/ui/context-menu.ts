@@ -1,6 +1,7 @@
 import type { Command, CommandId } from './command-registry';
 import { icon } from './icons';
 import { escapeHtml } from './utils';
+import { localizeUi } from './i18n';
 
 /** A contextual command view uses the same actions and availability as command search. */
 export class ContextMenuController {
@@ -24,6 +25,7 @@ export class ContextMenuController {
     menu.setAttribute('aria-label', label);
     menu.innerHTML = `<div class="context-menu-heading">${escapeHtml(label)}</div>${commands.map((command) => `<button type="button" role="menuitem" data-command="${escapeHtml(command.id)}" class="context-menu-item${command.destructive ? ' destructive' : ''}" ${command.enabled ? '' : 'disabled'} title="${escapeHtml(command.disabledReason ?? '')}">${command.icon ? icon(command.icon) : ''}<span>${escapeHtml(command.label)}</span>${command.shortcut ? `<kbd>${escapeHtml(command.shortcut.replace('Mod', '⌘/Ctrl'))}</kbd>` : ''}</button>`).join('')}`;
     document.body.append(menu);
+    localizeUi(menu);
     this.element = menu;
     const bounds = menu.getBoundingClientRect();
     menu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - bounds.width - 8))}px`;
