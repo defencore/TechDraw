@@ -24,11 +24,13 @@ The application is a static TypeScript/Vite project with a small shared data mod
 | `src/state.ts`                                             | Drawing defaults, workspace shape and per-part dimension/layout snapshot history                   |
 | `src/main.ts`                                              | Workspace interaction, import queue, selected parts, project files and accessible controls         |
 | `src/ui/drawing-canvas.ts`                                 | Persistent canvas controller for pointer gestures, draft placement, selection and viewport updates |
+| `src/ui/drawing-toolbar.ts`                                | Visible measurement-tool palette, selection/pan controls and viewport actions                      |
+| `src/ui/dimension-editor.ts`                               | Compact selected-dimension panel with tolerance controls and optional position/text settings       |
 | `src/ui/viewport.ts`                                       | Pure fit, pan, cursor-anchored zoom and viewport/sheet coordinate conversion                       |
 | `src/ui/geometry-picking.ts`                               | Screen-radius picking of edges, endpoints and centres with model-coordinate references             |
 | `src/ui/dimension-picking.ts`                              | Screen-space picking of annotation labels and lines                                                |
 | `src/ui/dimension-drag.ts`                                 | Pure paper-space annotation dragging and draft positioning                                         |
-| `src/ui/tolerance-editor.ts`                               | Draft tolerance controls, validation preview and explicit Apply/Clear actions                      |
+| `src/ui/tolerance-editor.ts`                               | Tolerance-mode buttons, numeric/sign controls, draft preview and explicit Apply/Clear actions      |
 | `src/ui/title-block-editor.ts`                             | English editor for document data, sign-offs, changes, inventory and technical requirements         |
 | `src/ui/title-block-cache.ts`                              | Whitelisted browser persistence of document fields and selected template                           |
 | `src/ui/views.ts`, `components.ts`, `utils.ts`, `icons.ts` | Workspace views, accessible controls, escaping and icons                                           |
@@ -62,13 +64,15 @@ The canvas has three coordinate spaces: model coordinates for measurements, pape
 
 Display zoom is clamped to 25–1600%. Space + drag, middle mouse drag, the hand tool, or dragging empty space in selection mode pans the sheet. `0` fits the sheet; `+` and `-` zoom around the viewport centre. These operations never change the model, drawing scale, annotation values or cached drawing layout.
 
-Geometry and dimension picking use screen-pixel tolerances so their hit areas remain usable at different zoom levels. A new dimension follows a pick → draft preview → click-to-place interaction. Existing labels and dimension lines can be dragged. `Esc` cancels the pending operation; undo/redo acts on committed dimension/layout snapshots.
+Geometry and dimension picking use screen-pixel tolerances so their hit areas remain usable at different zoom levels. Six visible buttons expose Horizontal (`H`), Vertical (`V`), Aligned (`L`), Diameter (`D`), Radius (`R`) and Angle (`A`) tools. Shortcuts are inactive while text fields are being edited. A new dimension follows a pick → draft preview → click-to-place interaction. Selecting a dimension opens its compact editing panel; existing labels and dimension lines can be dragged. `Esc` cancels the pending operation; undo/redo acts on committed dimension/layout snapshots.
 
 ## Dimension tolerances
 
 `Dimension.tolerance` is optional. An absent property means no structured tolerance; the supported variants are symmetric magnitude, upper/lower deviations, and a fit designation. Decimal values are stored as validated strings so entered precision can be preserved. Linear deviations use millimetres; angular deviations use degrees. Fits are manually entered linear-dimension labels, with no inferred fit class or numeric limit lookup.
 
-The tolerance editor holds uncommitted mode and text separately from the drawing. This lets a field contain an incomplete sign or decimal while the user types. Mode changes and typing do not create history entries or export draft values. A valid **Apply** commits one dimension/layout snapshot; **Clear** removes the applied tolerance. Saved projects and PDF output use only committed data. The free-text note after a dimension remains separate from its structured tolerance.
+The tolerance editor uses visible mode buttons. Symmetric magnitude has a fixed ± adornment and accepts numeric text only; upper/lower fields have explicit sign controls. The editor holds uncommitted mode and text separately from the drawing, allowing incomplete decimal entries while typing. Mode/sign changes and typing do not create history entries or export draft values. A valid **Apply** commits one dimension/layout snapshot; **Clear** removes the applied tolerance. Saved projects and PDF output use only committed data. The free-text note after a dimension remains separate from its structured tolerance.
+
+Select/Pan changes and edits to the currently selected annotation patch canvas state and committed values without rebuilding its inspector. This preserves unapplied tolerance input during navigation and dragging. Mode and sign controls update their own fields and preview; the active-mode button leaves the existing draft intact. Changing the selected dimension or beginning a different measurement starts a new editing context.
 
 `dimension-label.ts` supplies shared text runs and bounds. Symmetric ± and fit labels are inline; upper/lower deviations are stacked. Rendering, annotation picking and layout use the same label geometry so tolerance text remains selectable and its full extent is considered during placement and overflow checks.
 

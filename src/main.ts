@@ -3,6 +3,7 @@ import { createCadClient } from './cad/client';
 import { autoDimensions, formatDimension } from './drawing/dimensions';
 import { normalizeToleranceNumber, parseDimensionTolerance } from './drawing/tolerances';
 import { renderToleranceFields, type ToleranceMode } from './ui/tolerance-editor';
+import { renderDrawingToolbar, dimensionTools } from './ui/drawing-toolbar';
 import { initializeDrawing } from './drawing/layout';
 import { titleBlockDefaults, cleanTitleBlockText } from './drawing/title-block-data';
 import {
@@ -43,7 +44,7 @@ let theme = readPreference<string>(
   'theme',
   matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light',
 );
-let inspectorTab = 'sheet';
+let inspectorTab = 'dimensions';
 let tool: CanvasTool = 'select';
 let selectedDimension: string | undefined;
 let busy = false;
@@ -72,13 +73,18 @@ const history = () => {
 
 const drawingCanvas = new DrawingCanvas({
   select(id) {
+    const refresh = selectedDimension !== id || inspectorTab !== 'dimensions';
     selectedDimension = id;
     inspectorTab = 'dimensions';
-    refreshInspector();
+    if (refresh) refreshInspector();
   },
   add: addDimension,
   edit(dimension) {
-    changeDimensions(dims().map((d) => (d.id === dimension.id ? dimension : d)));
+    changeDimensions(
+      dims().map((d) => (d.id === dimension.id ? dimension : d)),
+      false,
+      true,
+    );
   },
   zoom() {
     const select = document.querySelector<HTMLSelectElement>('#zoom');
@@ -180,10 +186,7 @@ function render(): void {
       </aside>
       <main class="drawing-workspace">
         <div class="workspace-heading"><div><div class="eyebrow">DRAWING WORKSPACE</div><h1>${part ? e(part.name) : 'From solid to sheet'}</h1></div><div class="export-group">${button('export-svg', 'SVG', undefined, 'secondary compact', !part || busy ? 'disabled' : '')}${button('export-pdf', `Export PDF${state.selected.size > 1 ? ` · ${state.selected.size}` : ''}`, 'download', 'primary', !state.selected.size || busy ? 'disabled' : '')}</div></div>
-        <div class="drawing-toolbar" role="toolbar" aria-label="Drawing tools">
-          <div class="tool-group">${button('tool:select', '', 'pointer', `tool-button ${tool === 'select' ? 'active' : ''}`, 'aria-label="Select and move dimensions" title="Select and move (Esc)"')}${button('tool:pan', '', 'hand', `tool-button ${tool === 'pan' ? 'active' : ''}`, 'aria-label="Pan drawing" title="Pan (Space + drag or middle mouse)"')}${button('auto-dimensions', 'Auto dimensions', 'dimension', 'quiet', !part || busy ? 'disabled' : '')}${button('arrange-dimensions', 'Arrange', 'layers', 'quiet', !part || busy ? 'disabled title="Arrange dimension lines"' : 'title="Place smaller dimensions inside larger ones"')}<span class="toolbar-divider"></span><select id="measure-tool" aria-label="Add dimension" ${!part || busy ? 'disabled' : ''}>${option('select', 'Add dimension…', tool)}${option('horizontal', 'Horizontal', tool)}${option('vertical', 'Vertical', tool)}${option('aligned', 'Aligned', tool)}${option('diameter', 'Diameter', tool)}${option('radius', 'Radius', tool)}${option('angle', 'Angle', tool)}</select></div>
-          <div class="tool-group">${button('undo', '', 'undo', 'icon-button', `aria-label="Undo" title="Undo (Ctrl/⌘ Z)" ${!history()?.canUndo ? 'disabled' : ''}`)}${button('redo', '', 'redo', 'icon-button', `aria-label="Redo" title="Redo (Ctrl/⌘ Shift Z)" ${!history()?.canRedo ? 'disabled' : ''}`)}<span class="toolbar-divider"></span>${button('fit', '', 'fit', 'icon-button', 'aria-label="Fit sheet" title="Fit sheet (0)"')}${button('zoom-out', '', 'minus', 'icon-button', 'aria-label="Zoom out" title="Zoom out (-)"')}<select id="zoom" aria-label="Sheet zoom">${zoomOptions()}</select>${button('zoom-in', '', 'plus', 'icon-button', 'aria-label="Zoom in" title="Zoom in (+)"')}</div>
-        </div>
+        ${renderDrawingToolbar({ tool, enabled: Boolean(part) && !busy, canUndo: Boolean(history()?.canUndo), canRedo: Boolean(history()?.canRedo), zoomOptions: zoomOptions() })}
         <div class="canvas-area ${!['select', 'pan'].includes(tool) ? 'measuring' : ''}" id="canvas-area" tabindex="0" aria-label="Drawing canvas. Wheel to zoom, drag empty space to pan."><div class="drop-overlay">${icon('upload')}Drop STEP files to import</div><div id="paper-host"></div>${!part ? views.renderEmpty() : ''}</div>
         <div class="canvas-status"><span id="tool-hint">${e(canvasHint)}</span><span>${part ? `${state.settings.format} · ${state.settings.orientation} · mm` : 'STEP / STP · Multiple files supported'}</span></div>
       </main>
@@ -260,19 +263,36 @@ function updateProgress(): void {
   if (el) el.textContent = progress;
 }
 function setTool(value: CanvasTool): void {
+  if (busy || (value !== 'select' && value !== 'pan' && !active())) return;
+  drawingCanvas.cancel();
   tool = value;
-  selectedDimension = undefined;
   drawingCanvas.setTool(value);
-  render();
+  if (value !== 'select' && value !== 'pan') {
+    selectedDimension = undefined;
+    inspectorTab = 'dimensions';
+    refreshInspector();
+    renderPaper();
+  }
+  for (const control of app.querySelectorAll<HTMLButtonElement>('[data-action^="tool:"]')) {
+    const selected = control.dataset.action === `tool:${value}`;
+    control.classList.toggle('active', selected);
+    control.setAttribute('aria-pressed', String(selected));
+  }
 }
-function changeDimensions(next: Dimension[], arrange = false): void {
+function changeDimensions(next: Dimension[], arrange = false, preserveEditor = false): void {
   history()?.record({ dimensions: dims(), layout: state.layouts[state.activeId!] });
   if (arrange) {
     delete state.layouts[state.activeId!];
     pendingArrangement.add(state.activeId!);
   }
   state.dimensions[state.activeId!] = next;
-  render();
+  if (preserveEditor) {
+    renderPaper();
+    updateUndoControls();
+    const offset = app.querySelector<HTMLInputElement>('[data-dimension-setting="offset"]');
+    const dimension = next.find((d) => d.id === selectedDimension);
+    if (offset && dimension) offset.value = dimension.offset.toFixed(1);
+  } else render();
 }
 
 function controlSettingValue(
@@ -331,16 +351,20 @@ function updateDimensionControl(control: HTMLInputElement): void {
   state.dimensions[state.activeId!] = next;
   clearTimeout(paperUpdateTimer);
   paperUpdateTimer = setTimeout(renderPaper, 80);
+  updateUndoControls();
+}
+function updateUndoControls(): void {
   const undo = app.querySelector<HTMLButtonElement>('[data-action="undo"]'),
     redo = app.querySelector<HTMLButtonElement>('[data-action="redo"]');
-  if (undo) undo.disabled = false;
-  if (redo) redo.disabled = true;
+  if (undo) undo.disabled = !history()?.canUndo;
+  if (redo) redo.disabled = !history()?.canRedo;
 }
 
 function toleranceFromControls(): DimensionTolerance | undefined {
   const dimension = dims().find((d) => d.id === selectedDimension);
   if (!dimension) throw new Error('Select a dimension first.');
-  const mode = app.querySelector<HTMLSelectElement>('#tolerance-kind')?.value as ToleranceMode;
+  const mode = app.querySelector<HTMLButtonElement>('#tolerance-modes [aria-checked="true"]')
+    ?.dataset.toleranceMode as ToleranceMode;
   const raw = (key: string) =>
     app.querySelector<HTMLInputElement>(`[data-tolerance-field="${key}"]`)?.value ?? '';
   const decimal = (key: string) => {
@@ -360,11 +384,39 @@ function toleranceFromControls(): DimensionTolerance | undefined {
       : { kind: mode, upper: decimal('upper'), lower: decimal('lower') },
   );
 }
+function setToleranceMode(mode: ToleranceMode): void {
+  const group = app.querySelector('#tolerance-modes');
+  const selected = group?.querySelector<HTMLButtonElement>(`[data-tolerance-mode="${mode}"]`);
+  if (!selected || selected.disabled || selected.getAttribute('aria-checked') === 'true') return;
+  const dimension = dims().find((d) => d.id === selectedDimension);
+  const fields = app.querySelector('#tolerance-fields');
+  if (!dimension || !fields) return;
+  for (const control of group!.querySelectorAll<HTMLButtonElement>('[data-tolerance-mode]')) {
+    const active = control === selected;
+    control.classList.toggle('active', active);
+    control.setAttribute('aria-checked', String(active));
+    control.tabIndex = active ? 0 : -1;
+  }
+  fields.innerHTML = renderToleranceFields(mode, dimension);
+  const apply = app.querySelector<HTMLButtonElement>('[data-action="apply-tolerance"]');
+  if (apply) apply.disabled = mode === 'none' && !dimension.tolerance;
+  updateTolerancePreview();
+}
 function updateTolerancePreview(): void {
   const preview = app.querySelector('#tolerance-preview');
   if (!preview) return;
   const error = app.querySelector<HTMLElement>('#tolerance-error');
   if (error) error.hidden = true;
+  for (const control of app.querySelectorAll<HTMLButtonElement>('[data-tolerance-sign]')) {
+    const input = app.querySelector<HTMLInputElement>(
+      `[data-tolerance-field="${control.dataset.toleranceTarget}"]`,
+    );
+    const value = input?.value.trim() ?? '';
+    const sign = value ? (/^[-−]/.test(value) ? '-' : '+') : undefined;
+    const active = control.dataset.toleranceSign === sign;
+    control.classList.toggle('active', active);
+    control.setAttribute('aria-pressed', String(active));
+  }
   const dimension = dims().find((d) => d.id === selectedDimension);
   try {
     const tolerance = toleranceFromControls();
@@ -607,6 +659,23 @@ function addDimension(d: Dimension): void {
 app.addEventListener('click', (event) => {
   const target = event.target as Element;
   syncSettingsFromControls();
+  const toleranceMode = target.closest<HTMLButtonElement>('[data-tolerance-mode]');
+  if (toleranceMode) {
+    setToleranceMode(toleranceMode.dataset.toleranceMode as ToleranceMode);
+    return;
+  }
+  const toleranceSign = target.closest<HTMLButtonElement>('[data-tolerance-sign]');
+  if (toleranceSign) {
+    const input = app.querySelector<HTMLInputElement>(
+      `[data-tolerance-field="${toleranceSign.dataset.toleranceTarget}"]`,
+    );
+    if (input) {
+      input.value = `${toleranceSign.dataset.toleranceSign}${input.value.trim().replace(/^[+−-]/, '')}`;
+      updateTolerancePreview();
+      input.focus({ preventScroll: true });
+    }
+    return;
+  }
   if (target.classList.contains('modal-backdrop')) {
     helpOpen = false;
     render();
@@ -700,8 +769,11 @@ app.addEventListener('click', (event) => {
     } else if (action.startsWith('tab:')) {
       inspectorTab = action.slice(4);
       render();
-    } else if (action === 'tool:select') setTool('select');
-    else if (action === 'tool:pan') setTool('pan');
+    } else if (action.startsWith('tool:')) {
+      const value = action.slice(5);
+      if (value === 'select' || value === 'pan' || dimensionTools.some((item) => item.id === value))
+        setTool(value as CanvasTool);
+    }
     return;
   }
   const removeId = target.closest<HTMLElement>('[data-remove-part]')?.dataset.removePart;
@@ -730,6 +802,10 @@ app.addEventListener('click', (event) => {
   const dimensionId =
     target.closest<HTMLElement>('[data-dimension-select]')?.dataset.dimensionSelect;
   if (dimensionId) {
+    if (dimensionId === selectedDimension && inspectorTab === 'dimensions') {
+      setTool('select');
+      return;
+    }
     selectedDimension = dimensionId;
     inspectorTab = 'dimensions';
     tool = 'select';
@@ -740,16 +816,6 @@ app.addEventListener('click', (event) => {
 
 app.addEventListener('change', (event) => {
   const target = event.target as HTMLInputElement;
-  if (target.id === 'tolerance-kind') {
-    const dimension = dims().find((d) => d.id === selectedDimension);
-    const fields = app.querySelector('#tolerance-fields');
-    if (dimension && fields)
-      fields.innerHTML = renderToleranceFields(target.value as ToleranceMode, dimension);
-    const apply = app.querySelector<HTMLButtonElement>('[data-action="apply-tolerance"]');
-    if (apply) apply.disabled = target.value === 'none' && !dimension?.tolerance;
-    updateTolerancePreview();
-    return;
-  }
   if (target.id === 'file-input') {
     void importFiles(Array.from(target.files ?? []));
     target.value = '';
@@ -759,10 +825,6 @@ app.addEventListener('change', (event) => {
     const file = target.files?.[0];
     if (file) void openProject(file);
     target.value = '';
-    return;
-  }
-  if (target.id === 'measure-tool') {
-    setTool(target.value as typeof tool);
     return;
   }
   if (target.id === 'auto-detail') {
@@ -836,6 +898,34 @@ window.addEventListener('drop', (event) => {
   if (event.dataTransfer) void importFiles([...event.dataTransfer.files]);
 });
 window.addEventListener('keydown', (event) => {
+  const modeControl = (event.target as HTMLElement)?.closest<HTMLButtonElement>(
+    '[data-tolerance-mode]',
+  );
+  if (
+    modeControl &&
+    ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)
+  ) {
+    const controls = [
+      ...app.querySelectorAll<HTMLButtonElement>('[data-tolerance-mode]:not(:disabled)'),
+    ];
+    const current = controls.indexOf(modeControl);
+    const index =
+      event.key === 'Home'
+        ? 0
+        : event.key === 'End'
+          ? controls.length - 1
+          : (current +
+              (event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1 : 1) +
+              controls.length) %
+            controls.length;
+    event.preventDefault();
+    const next = controls[index];
+    if (next) {
+      setToleranceMode(next.dataset.toleranceMode as ToleranceMode);
+      next.focus();
+    }
+    return;
+  }
   if (event.key === 'Enter' && (event.target as HTMLElement)?.dataset.toleranceField) {
     event.preventDefault();
     applyTolerance();
@@ -858,13 +948,32 @@ window.addEventListener('keydown', (event) => {
   }
   const editing = (event.target as Element)?.matches('input,textarea,select');
   if (event.key === 'Escape') {
+    const wasHelpOpen = helpOpen;
     helpOpen = false;
     drawingCanvas.cancel();
     setTool('select');
+    if (wasHelpOpen) render();
     return;
   }
   if (editing) return;
+  if (!event.ctrlKey && !event.metaKey && !event.altKey && !helpOpen) {
+    const shortcut = dimensionTools.find(
+      (item) => item.shortcut.toLowerCase() === event.key.toLowerCase(),
+    );
+    if (shortcut && active() && !busy) {
+      event.preventDefault();
+      setTool(shortcut.id);
+      return;
+    }
+  }
   if (event.code === 'Space') {
+    const target = event.target as Element;
+    if (
+      target !== document.body &&
+      target !== document.documentElement &&
+      !target.closest('#canvas-area')
+    )
+      return;
     event.preventDefault();
     drawingCanvas.setPanKey(true);
     return;
