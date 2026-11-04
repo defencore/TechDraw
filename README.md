@@ -47,6 +47,10 @@ Automatic dimensions are geometric suggestions. The app does not import semantic
 
 The inspector tabs are **Dimensions**, **Markup**, **Instructions**, **Part type**, **Sheet** and **Title block**.
 
+On a computer, the drawing stays in place while the file list and property panel scroll independently. Each part and tab keeps its panel position and expanded sections. When a tab has keyboard focus, Left/Right and Home/End switch panels. Phone and tablet layouts retain normal page scrolling.
+
+Import, open, save and PDF operations run one at a time. Import/preparation can be cancelled; a late result cannot alter a newer operation. Saving holds the workspace until the archive is ready. The browser's leave-page warning reflects changes since the last successful Save/Open and unapplied drafts, rather than appearing for every loaded drawing. Apply tolerance and text-note drafts explicitly before saving to include those changes.
+
 ## Manufacturing instructions and drawing sets
 
 **Instructions** belongs to the active part. Enter one manufacturing step per line; nonempty lines become numbered steps. Short text fits beside the title block; longer text uses a full-width panel above it. Existing step numbers are retained. **Apply instructions** updates the preview, **Reset draft** restores that part's last committed text, and Undo restores its previous instructions and layout. Switching parts keeps each part's draft independently.

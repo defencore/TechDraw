@@ -19,22 +19,29 @@ export function stepPartDisplayName(
 
 interface RecordData {
   type: string;
-  body: string;
   refs: number[];
   strings: string[];
 }
+const METADATA_TYPES = new Set([
+  'PRODUCT',
+  'PRODUCT_DEFINITION',
+  'PRODUCT_DEFINITION_FORMATION',
+  'PRODUCT_DEFINITION_FORMATION_WITH_SPECIFIED_SOURCE',
+  'NEXT_ASSEMBLY_USAGE_OCCURRENCE',
+  'ASSEMBLY_COMPONENT_USAGE',
+]);
 
 /** Read semantic names and relationships only; all geometry comes from OCCT. */
 export function readStepProducts(text: string): StepProduct[] {
   const records = new Map<number, RecordData>();
   const pattern = /#(\d+)\s*=\s*([A-Z][A-Z0-9_]*)\s*\(((?:'(?:[^']|'')*'|[^';])*)\)\s*;/g;
   for (const match of text.matchAll(pattern)) {
+    if (!METADATA_TYPES.has(match[2])) continue;
     const body = match[3];
     // Remove strings before looking for references, as a name may contain '#'.
     const withoutStrings = body.replace(/'(?:[^']|'')*'/g, '');
     records.set(Number(match[1]), {
       type: match[2],
-      body,
       refs: [...withoutStrings.matchAll(/#(\d+)/g)].map((m) => Number(m[1])),
       strings: [...body.matchAll(/'((?:[^']|'')*)'/g)].map((m) => m[1].replace(/''/g, "'")),
     });
@@ -58,14 +65,26 @@ export function readStepProducts(text: string): StepProduct[] {
     parents.set(child, [...(parents.get(child) || []), parent]);
     children.set(parent, [...(children.get(parent) || []), child]);
   }
-  const pathsTo = (id: number, seen = new Set<number>()): string[][] => {
-    if (seen.has(id) || seen.size > 32) return [[definitions.get(id)!]];
-    const next = new Set(seen).add(id);
-    const upstream = [...new Set(parents.get(id) || [])];
-    if (!upstream.length) return [[definitions.get(id)!]];
-    return upstream
-      .flatMap((parent) => pathsTo(parent, next).map((path) => [...path, definitions.get(id)!]))
-      .slice(0, 500);
+  const pathsTo = (id: number): string[][] => {
+    const paths: string[][] = [];
+    const visit = (current: number, suffix: string[], seen: Set<number>) => {
+      if (paths.length >= 500) return;
+      const path = [definitions.get(current)!, ...suffix];
+      const upstream = [...new Set(parents.get(current) || [])];
+      if (!upstream.length || seen.has(current) || seen.size > 32) {
+        paths.push(path);
+        return;
+      }
+      const next = new Set(seen).add(current);
+      for (const parent of upstream) {
+        visit(parent, path, next);
+        if (paths.length >= 500) break;
+      }
+    };
+    // Stop traversal when the result budget is reached, before expanding another
+    // shared assembly branch. Truncating a flatMap afterward still grows exponentially.
+    visit(id, [], new Set());
+    return paths;
   };
   // Assemblies are represented by their independently selectable leaf products.
   return [...definitions]

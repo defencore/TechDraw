@@ -29,7 +29,7 @@ export function renderWorkspaceGrid(
   settings: GridSettings,
   pixelsPerMillimetre: number,
 ): string {
-  if (!settings.visible) return '';
+  if (!settings.visible || content.maxX <= content.minX || content.maxY <= content.minY) return '';
   const step = visibleGridSpacing(settings.spacing, pixelsPerMillimetre);
   const stroke = 0.65 / pixelsPerMillimetre;
   const major = step * 5;

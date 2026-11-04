@@ -55,6 +55,12 @@ test('a dense workspace grid coarsens only its display and retains the physical 
   assert.equal(snapCoordinate(23.17, fine.spacing), 23.2);
 });
 
+test('an overfull sheet has no workspace grid instead of invalid negative-size SVG rectangles', () => {
+  const visible = { ...grid, visible: true };
+  assert.equal(renderWorkspaceGrid({ minX: 20, minY: 300, maxX: 200, maxY: 220 }, visible, 1), '');
+  assert.equal(renderWorkspaceGrid({ minX: 200, minY: 20, maxX: 200, maxY: 220 }, visible, 1), '');
+});
+
 test('linear snapping quantizes actual paper dimension lines, not model coordinates or offsets', () => {
   const horizontal = dimension();
   const moved = snapDimensionToGrid(horizontal, transform, 2, grid);

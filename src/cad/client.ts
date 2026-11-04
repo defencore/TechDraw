@@ -1,4 +1,5 @@
 import type { ImportResult } from '../model';
+import { MAX_SOURCE_BYTES } from '../io/source-repository';
 
 export interface CadClient {
   importStep(buffer: ArrayBuffer, name: string): Promise<ImportResult>;
@@ -29,7 +30,12 @@ export function createCadClient(onProgress: (message: string) => void = () => {}
       exampleFetch.controller.abort();
       exampleFetch = undefined;
     }
-    worker?.terminate();
+    if (worker) {
+      worker.onmessage = null;
+      worker.onerror = null;
+      worker.onmessageerror = null;
+      worker.terminate();
+    }
     worker = undefined;
     requests.forEach((request) => {
       clearTimeout(request.timer);
@@ -39,8 +45,10 @@ export function createCadClient(onProgress: (message: string) => void = () => {}
   };
   const getWorker = () => {
     if (!worker) {
-      worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
-      worker.onmessage = (event) => {
+      const created = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
+      worker = created;
+      created.onmessage = (event) => {
+        if (worker !== created) return;
         const { id, type, message, result } = event.data;
         const request = requests.get(id);
         if (!request) return;
@@ -53,8 +61,14 @@ export function createCadClient(onProgress: (message: string) => void = () => {}
         if (type === 'result') request.resolve(result);
         else request.reject(new Error(message));
       };
-      worker.onerror = () =>
-        stop('The CAD engine stopped unexpectedly. Try a smaller STEP file or reload the page.');
+      created.onerror = () => {
+        if (worker === created)
+          stop('The CAD engine stopped unexpectedly. Try a smaller STEP file or reload the page.');
+      };
+      created.onmessageerror = () => {
+        if (worker === created)
+          stop('The CAD engine returned unreadable data. Try importing the STEP file again.');
+      };
     }
     return worker;
   };
@@ -63,9 +77,21 @@ export function createCadClient(onProgress: (message: string) => void = () => {}
       return Promise.reject(
         new Error('Wait for the current import or cancel it before starting another.'),
       );
-    const active = getWorker(),
-      id = ++sequence;
+    if (
+      !(buffer instanceof ArrayBuffer) ||
+      !buffer.byteLength ||
+      buffer.byteLength > MAX_SOURCE_BYTES
+    )
+      return Promise.reject(new Error('Choose a nonempty STEP file no larger than 64 MB.'));
+    const id = ++sequence;
     return new Promise((resolve, reject) => {
+      let active: Worker;
+      try {
+        active = getWorker();
+      } catch {
+        reject(new Error('The CAD engine could not start. Reload the page and try again.'));
+        return;
+      }
       const timer = setTimeout(
         () =>
           stop(
@@ -74,7 +100,11 @@ export function createCadClient(onProgress: (message: string) => void = () => {}
         300000,
       );
       requests.set(id, { resolve, reject, timer });
-      active.postMessage({ id, buffer, name }, [buffer]);
+      try {
+        active.postMessage({ id, buffer, name }, [buffer]);
+      } catch {
+        stop('The CAD engine could not receive this file. Try importing it again.');
+      }
     });
   };
   const demo = async (): Promise<ImportResult & { sourceBytes: Uint8Array }> => {

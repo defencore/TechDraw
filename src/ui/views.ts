@@ -23,9 +23,9 @@ interface ViewContext {
   placement: PlacementControls;
   autoDetail: 'balanced' | 'full';
   collapsedBranches: Set<string>;
-  annotationPanel?: string;
-  instructionsPanel?: string;
-  manufacturingPanel?: string;
+  annotationPanel?: () => string;
+  instructionsPanel?: () => string;
+  manufacturingPanel?: () => string;
   hasLockedItems?: boolean;
 }
 
@@ -104,9 +104,9 @@ export function createWorkspaceViews({
       return `<div class="section-label">PAGE SETUP</div>${hasLockedItems ? '<p class="locked-item-notice">Unlock drawing items before changing the sheet layout.</p>' : ''}<div class="field-row"><label class="field"><span>Format</span><select data-setting="format"${layoutDisabled}>${['A4', 'A3', 'A2', 'A1'].map((x) => option(x, x, s.format)).join('')}</select></label><label class="field"><span>Orientation</span><select data-setting="orientation"${layoutDisabled}>${s.format === 'A4' && (s.template === 'eskd' || s.template === 'eskd-uk') ? '<option value="landscape" disabled>Landscape (use ISO or Minimal)</option>' : option('landscape', 'Landscape', s.orientation)}${option('portrait', 'Portrait', s.orientation)}</select></label></div><label class="field"><span>Drawing template</span><select data-setting="template"${layoutDisabled}>${option('eskd', 'ESKD · GOST 2.104-68 · English', s.template)}${option('eskd-uk', 'ESKD · GOST 2.104-68 · Ukrainian', s.template)}${option('iso', 'ISO style', s.template)}${option('minimal', 'Minimal', s.template)}</select></label><p class="field-help">${part?.sourceKind === 'dxf' ? '2D drawing from DXF. No depth or additional projections are inferred. Drawing scale controls printed size; Zoom inspects details.' : 'First-angle projection. ESKD templates use Form 1 (185 × 55 mm) with 20 mm left and 5 mm other frame margins. Use A4 portrait for the standard A4 arrangement. Drawing scale controls printed size; Zoom inspects details.'}</p><div class="field-row"><label class="field"><span>Drawing scale</span><select data-setting="scale"${layoutDisabled}>${option('auto', 'Auto fit', s.scale)}${scales.map((x) => option(x, x >= 1 ? `${x}:1` : `1:${+(1 / x).toFixed(3)}`, s.scale)).join('')}</select></label><label class="field"><span>Decimal places</span><select data-setting="precision">${[0, 1, 2, 3, 4, 5, 6].map((x) => option(x, String(x), s.precision)).join('')}</select></label></div><div class="inspector-rule"></div><div class="section-label">DISPLAY</div><label class="switch-row"><span>Hidden edges</span><input type="checkbox" data-setting="hiddenLines" ${s.hiddenLines ? 'checked' : ''}/></label><label class="switch-row"><span>Center lines</span><input type="checkbox" data-setting="centerLines" ${s.centerLines ? 'checked' : ''}/></label><label class="field"><span>Automatic dimension detail</span><select id="auto-detail">${option('balanced', 'Balanced', autoDetail)}${option('full', 'All baseline coordinates', autoDetail)}</select></label><p class="field-help">Refreshes automatic suggestions while keeping manual dimensions and specifications. Undo restores the previous set.</p><div class="inspector-rule"></div><div class="section-label">CURRENT SHEET</div><div id="sheet-stats" class="sheet-stats">${part ? 'Generating layout…' : 'Import a part to create a sheet.'}</div><p class="field-help">One selected part per PDF page. Use the checkboxes in the parts list to create a drawing set.</p>`;
     if (inspectorTab === 'details')
       return `${renderTitleBlockEditor(s, part?.name)}${part?.sourceNotes?.length ? `<details class="source-notes"><summary>DXF source notes</summary><p class="field-help">DXF notes are reference text from the source file, not measured geometry.</p>${part.sourceNotes.map((note) => `<p data-user-content>${e(note)}</p>`).join('')}</details>` : ''}${part?.warnings.length ? `<div class="geometry-note"><strong>Import notes</strong>${part.warnings.map((w) => `<p>${e(w)}</p>`).join('')}</div>` : ''}`;
-    if (inspectorTab === 'annotations') return annotationPanel ?? '';
-    if (inspectorTab === 'instructions') return instructionsPanel ?? '';
-    if (inspectorTab === 'manufacturing') return manufacturingPanel ?? '';
+    if (inspectorTab === 'annotations') return annotationPanel?.() ?? '';
+    if (inspectorTab === 'instructions') return instructionsPanel?.() ?? '';
+    if (inspectorTab === 'manufacturing') return manufacturingPanel?.() ?? '';
     const selectedCount = dims().filter((item) => selectedDimensionIds.has(item.id)).length;
     const lockedCount = dims().filter(
       (item) => selectedDimensionIds.has(item.id) && item.locked,

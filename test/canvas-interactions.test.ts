@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
-import { DrawingCanvas } from '../src/ui/drawing-canvas';
+import { DrawingCanvas, type CanvasDocument } from '../src/ui/drawing-canvas';
 import { renderDrawing } from '../src/drawing/render';
 import { drawingPage } from '../src/drawing/page-layout';
 import { dimensionGeometry } from '../src/drawing/dimension-geometry';
@@ -173,7 +173,7 @@ function fixture(
     error: (error) => errors.push(error),
   });
   canvas.attach(host as unknown as HTMLElement);
-  const sheet = canvas.setDocument({
+  const document: CanvasDocument = {
     part,
     dimensions,
     annotations,
@@ -181,7 +181,8 @@ function fixture(
     layout: { scale: initial.scale, viewTransforms: initial.viewTransforms },
     selectedDimension: selectedDimensionIds.at(-1),
     selectedDimensionIds,
-  })!;
+  };
+  const sheet = canvas.setDocument(document)!;
   const client = (sheetPoint: Point2): Point2 => {
     const t = host.transform(),
       rect = host.getBoundingClientRect();
@@ -196,6 +197,7 @@ function fixture(
     host,
     canvas,
     sheet,
+    document,
     client,
     click,
     added,
@@ -817,6 +819,145 @@ test('two-finger touch navigation remains available in freehand mode without lea
   assert.equal(host.captured.size, 0);
 });
 
+test('extra touch contacts cannot replace a pinch gesture or turn navigation into drawing', () => {
+  const { canvas, host, addedAnnotations, editedAnnotations } = fixture();
+  canvas.setTool('freehand');
+  host.dispatch('pointerdown', { pointerType: 'touch', pointerId: 10, clientX: 250, clientY: 250 });
+  host.dispatch('pointerdown', { pointerType: 'touch', pointerId: 11, clientX: 350, clientY: 250 });
+  host.dispatch('pointermove', { pointerType: 'touch', pointerId: 11, clientX: 400, clientY: 250 });
+  const beforeThird = host.transform();
+  host.dispatch('pointerdown', { pointerType: 'touch', pointerId: 12, clientX: 500, clientY: 250 });
+  host.dispatch('pointermove', { pointerType: 'touch', pointerId: 12, clientX: 550, clientY: 250 });
+  assert.deepEqual(host.transform(), beforeThird);
+  host.dispatch('pointerup', { pointerType: 'touch', pointerId: 12, clientX: 550, clientY: 250 });
+  assert.deepEqual(host.transform(), beforeThird);
+  host.dispatch('pointermove', { pointerType: 'touch', pointerId: 11, clientX: 430, clientY: 250 });
+  assert.ok(
+    host.transform().scale > beforeThird.scale,
+    'The original two fingers must still control pinch zoom',
+  );
+  host.dispatch('pointerup', { pointerType: 'touch', pointerId: 11, clientX: 430, clientY: 250 });
+  host.dispatch('pointerup', { pointerType: 'touch', pointerId: 10, clientX: 250, clientY: 250 });
+  assert.equal(addedAnnotations.length + editedAnnotations.length, 0);
+  assert.equal(host.captured.size, 0);
+});
+
+test('pinch handoff to remaining fingers is continuous and cancellation releases every capture', () => {
+  const { canvas, host, addedAnnotations } = fixture();
+  canvas.setTool('freehand');
+  for (const [pointerId, clientX] of [
+    [10, 250],
+    [11, 350],
+    [12, 500],
+  ])
+    host.dispatch('pointerdown', { pointerType: 'touch', pointerId, clientX, clientY: 250 });
+  host.dispatch('pointermove', { pointerType: 'touch', pointerId: 11, clientX: 400, clientY: 250 });
+  const beforeHandoff = host.transform();
+  host.dispatch('pointerup', { pointerType: 'touch', pointerId: 10, clientX: 250, clientY: 250 });
+  assert.deepEqual(host.transform(), beforeHandoff);
+  host.dispatch('pointermove', { pointerType: 'touch', pointerId: 12, clientX: 550, clientY: 250 });
+  assert.ok(host.transform().scale > beforeHandoff.scale);
+  canvas.cancel();
+  assert.equal(host.captured.size, 0, 'Ending navigation must release both remaining fingers');
+  host.dispatch('pointerup', { pointerType: 'touch', pointerId: 11, clientX: 400, clientY: 250 });
+  host.dispatch('pointerup', { pointerType: 'touch', pointerId: 12, clientX: 550, clientY: 250 });
+  assert.equal(addedAnnotations.length, 0);
+});
+
+test('release-only drags use their final coordinates for dimensions, review shapes, notes and panning', () => {
+  const dimension = annotation('source', 10);
+  const drag = fixture([dimension], ['source']);
+  annotationPicker(drag.canvas).pick('source');
+  const t = drag.sheet.viewTransforms.front;
+  const first = drag.client([t.x + 50, t.y + 10]),
+    last = drag.client([t.x + 50, t.y + 22]);
+  drag.host.dispatch('pointerdown', { clientX: first[0], clientY: first[1] });
+  drag.host.dispatch('pointerup', { clientX: last[0], clientY: last[1] });
+  assert.equal(drag.edited.length, 1);
+  near(drag.edited[0].offset, 22);
+  assert.equal(drag.edited[0].value, 100);
+  assert.equal(dimension.offset, 10);
+
+  for (const pointerType of ['mouse', 'touch', 'pen']) {
+    const shape = fixture();
+    shape.canvas.setTool('rectangle');
+    const a = shape.client([20, 30]),
+      b = shape.client([50, 60]);
+    shape.host.dispatch('pointerdown', { pointerType, clientX: a[0], clientY: a[1] });
+    shape.host.dispatch('pointerup', { pointerType, clientX: b[0], clientY: b[1] });
+    assert.equal(shape.addedAnnotations.length, 1);
+    near(shape.addedAnnotations[0].points[1][0], 50);
+    near(shape.addedAnnotations[0].points[1][1], 60);
+    assert.equal(shape.host.captured.size, 0);
+  }
+  const note: DrawingAnnotation = {
+    id: 'note',
+    kind: 'text',
+    points: [[30, 40]],
+    text: 'Keep this text',
+    fontSize: 4,
+    strokeWidth: 0.35,
+  };
+  const text = fixture([], [], [note]),
+    a = text.client([31, 39]),
+    b = text.client([41, 44]);
+  text.host.dispatch('pointerdown', { clientX: a[0], clientY: a[1] });
+  text.host.dispatch('pointerup', { clientX: b[0], clientY: b[1] });
+  assert.equal(text.editedAnnotations.length, 1);
+  near(text.editedAnnotations[0].points[0][0], 40);
+  near(text.editedAnnotations[0].points[0][1], 45);
+  assert.equal(text.textRequests.length, 0);
+  text.canvas.setTool('text');
+  text.host.dispatch('pointerdown', { clientX: a[0] + 100, clientY: a[1] + 50 });
+  text.host.dispatch('pointerup', { clientX: a[0] + 140, clientY: a[1] + 80 });
+  assert.equal(text.textRequests.length, 0, 'A dragged text-tool gesture must not open a composer');
+
+  const pan = fixture();
+  pan.canvas.setTool('pan');
+  const before = pan.host.transform();
+  pan.host.dispatch('pointerdown', { clientX: 300, clientY: 300 });
+  pan.host.dispatch('pointerup', { clientX: 320, clientY: 330 });
+  near(pan.host.transform().x, before.x + 20);
+  near(pan.host.transform().y, before.y + 30);
+});
+
+test('pen-up coalesced samples retain a closed freehand stroke even without any move event', () => {
+  const { canvas, host, client, addedAnnotations } = fixture();
+  canvas.setTool('freehand');
+  const start = client([20, 30]);
+  const samples = [
+    [30, 40],
+    [40, 30],
+  ].map((p) => {
+    const position = client(p as Point2);
+    return { clientX: position[0], clientY: position[1] };
+  });
+  host.dispatch('pointerdown', {
+    pointerType: 'pen',
+    pointerId: 9,
+    clientX: start[0],
+    clientY: start[1],
+  });
+  host.dispatch('pointerup', {
+    pointerType: 'pen',
+    pointerId: 9,
+    clientX: start[0],
+    clientY: start[1],
+    getCoalescedEvents: () => samples,
+  });
+  assert.equal(addedAnnotations.length, 1);
+  for (const point of [
+    [30, 40],
+    [40, 30],
+  ])
+    assert.ok(
+      addedAnnotations[0].points.some(
+        (actual) => Math.hypot(actual[0] - point[0], actual[1] - point[1]) < 1e-8,
+      ),
+    );
+  assert.equal(host.captured.size, 0);
+});
+
 test('pen takes priority over a preceding palm gesture and cancelled capture cannot commit a partial stroke', () => {
   const { canvas, host, client, addedAnnotations } = fixture();
   canvas.setTool('freehand');
@@ -1280,12 +1421,27 @@ test('the retained workspace grid follows zoom behind the model and never change
   try {
     canvas.setGrid({ visible: true, snap: true, spacing: 1 });
     const overlay = children[0];
+    let gridWrites = 0,
+      gridMarkup = overlay.innerHTML;
+    Object.defineProperty(overlay, 'innerHTML', {
+      get: () => gridMarkup,
+      set: (value: string) => {
+        gridWrites++;
+        gridMarkup = value;
+      },
+    });
     assert.ok('workspaceGrid' in overlay.dataset);
     assert.equal(children[1], model);
     assert.equal(overlay.attributes['pointer-events'], 'none');
     const beforeZoom = canvas.gridDisplaySpacing!;
     assert.ok(beforeZoom > 1);
+    canvas.setTool('pan');
+    host.dispatch('pointerdown', { clientX: 300, clientY: 300 });
+    for (const clientX of [310, 320, 330]) host.dispatch('pointermove', { clientX, clientY: 300 });
+    host.dispatch('pointerup', { clientX: 330, clientY: 300 });
+    assert.equal(gridWrites, 0, 'Panning transforms the retained grid instead of rebuilding it');
     canvas.zoomBy(8);
+    assert.ok(gridWrites > 0, 'Zoom updates screen-sized grid strokes and display spacing');
     assert.equal(children[0], overlay, 'Zoom must retain the grid and model DOM');
     assert.ok(canvas.gridDisplaySpacing! < beforeZoom);
     assert.equal(host.paper.innerHTML, source);
@@ -1299,4 +1455,174 @@ test('the retained workspace grid follows zoom behind the model and never change
     if (originalDocument) Object.defineProperty(globalThis, 'document', originalDocument);
     else Reflect.deleteProperty(globalThis, 'document');
   }
+});
+
+test('selection-only document refreshes retain source SVG and update only changed indexed dimension groups', () => {
+  const { canvas, host, document } = fixture([annotation('one', 10), annotation('two', 25)]);
+  let sourceWrites = 0,
+    groupWrites = 0,
+    scans = 0,
+    source = host.paper.innerHTML;
+  const nodes: Group[] = [];
+  const parent = {
+    get lastElementChild() {
+      return nodes.at(-1);
+    },
+  };
+  class Group {
+    readonly dataset: { dimensionId: string };
+    readonly classes: Set<string>;
+    constructor(markup: string) {
+      const match = /<g class="([^"]+)" data-dimension-id="([^"]+)"/.exec(markup)!;
+      this.dataset = { dimensionId: match[2] };
+      this.classes = new Set(match[1].split(' '));
+    }
+    readonly classList = {
+      add: (name: string) => this.classes.add(name),
+      remove: (name: string) => this.classes.delete(name),
+      toggle: (name: string, force: boolean) =>
+        force ? this.classes.add(name) : this.classes.delete(name),
+    };
+    get parentElement() {
+      return parent;
+    }
+    get nextElementSibling() {
+      return nodes[nodes.indexOf(this) + 1];
+    }
+    get previousElementSibling() {
+      return nodes[nodes.indexOf(this) - 1];
+    }
+    set outerHTML(markup: string) {
+      groupWrites++;
+      nodes[nodes.indexOf(this)] = new Group(markup);
+    }
+  }
+  Object.defineProperty(host.paper, 'innerHTML', {
+    get: () => source,
+    set: (markup: string) => {
+      sourceWrites++;
+      source = markup;
+      nodes.splice(
+        0,
+        nodes.length,
+        ...[
+          ...markup.matchAll(/<g class="dimension(?: selected)?" data-dimension-id="[^"]+"[^>]*>/g),
+        ].map((match) => new Group(match[0])),
+      );
+    },
+  });
+  host.querySelectorAll = ((selector: string) => {
+    scans++;
+    return selector === '[data-dimension-id]' ? nodes : [];
+  }) as typeof host.querySelectorAll;
+  document.settings.title = 'Indexed drawing';
+  const sheet = canvas.setDocument(document)!;
+  const physicalSvg = source,
+    viewport = host.transform();
+  sourceWrites = groupWrites = scans = 0;
+  const selected: CanvasDocument = {
+    ...document,
+    selectedDimension: 'one',
+    selectedDimensionIds: ['one'],
+  };
+  assert.equal(canvas.setDocument(selected), sheet);
+  assert.equal(nodes[0].classes.has('selected'), true);
+  assert.equal(nodes[1].classes.has('selected'), false);
+  assert.equal(groupWrites, 1);
+  const firstSelectedNode = nodes[0];
+  assert.equal(
+    canvas.setDocument({
+      ...selected,
+      selectedDimension: 'two',
+      selectedDimensionIds: ['one', 'two'],
+      layout: structuredClone(selected.layout),
+    }),
+    sheet,
+  );
+  assert.equal(nodes[0], firstSelectedNode);
+  assert.equal(nodes[1].classes.has('selected'), true);
+  assert.equal(groupWrites, 2);
+  assert.equal(
+    sourceWrites,
+    0,
+    'A selection update must not serialize or replace the source sheet',
+  );
+  assert.equal(scans, 0, 'Indexed groups avoid rescanning all STEP paths during highlight changes');
+  assert.equal(host.paper.innerHTML, physicalSvg);
+  assert.deepEqual(host.transform(), viewport);
+  canvas.setReadOnly(true);
+  assert.ok(nodes.every((node) => !node.classes.has('selected')));
+  canvas.setReadOnly(false);
+  assert.ok(nodes.every((node) => node.classes.has('selected')));
+});
+
+test('drawing cache invalidates in-place text, dimensions, precision, locks, settings and profile edits', () => {
+  const note: DrawingAnnotation = {
+    id: 'note',
+    kind: 'text',
+    points: [[30, 40]],
+    text: 'Original note',
+    fontSize: 4,
+    strokeWidth: 0.35,
+  };
+  const { canvas, host, document } = fixture([annotation('one', 10)], [], [note]);
+  const mutations = [
+    () => {
+      document.part.name = 'Renamed part';
+    },
+    () => {
+      document.part.views[0].name = 'Renamed front view';
+    },
+    () => {
+      document.dimensions[0].offset = 18;
+    },
+    () => {
+      document.dimensions[0].minimumPrecision = 3;
+    },
+    () => {
+      document.dimensions[0].locked = true;
+    },
+    () => {
+      document.annotations![0].text = 'Changed note text';
+    },
+    () => {
+      document.annotations![0].color = '#4477aa';
+    },
+    () => {
+      document.annotations![0].locked = true;
+    },
+    () => {
+      document.settings.notes = 'New entered technical note';
+    },
+    () => {
+      document.settings.precision = 4;
+    },
+    () => {
+      document.layout.viewTransforms.front.x += 1;
+    },
+    () => {
+      document.part.manufacturing = {
+        type: 'plate',
+        profiles: { plate: { fields: { coating: 'Entered coating' }, parameters: [] } },
+      };
+    },
+    () => {
+      document.part.gearSpecification = { type: 'external-spur', normalModule: 2 };
+    },
+    () => {
+      document.appearance = 'blueprint';
+    },
+  ];
+  let rendered = canvas.setDocument(document)!;
+  for (const mutate of mutations) {
+    mutate();
+    const next = canvas.setDocument(document)!;
+    assert.notEqual(next, rendered, 'Edited drawing content must invalidate the cached rendering');
+    assert.equal(host.paper.innerHTML, next.svg);
+    rendered = next;
+  }
+  assert.ok(rendered.svg.includes('Changed note text'));
+  assert.ok(rendered.svg.includes('Entered coating'));
+  assert.ok(rendered.svg.includes('New entered technical note'));
+  assert.ok(rendered.svg.includes('#4477aa'));
 });

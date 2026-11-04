@@ -122,6 +122,63 @@ test('original source bytes are isolated from caller mutations and transferred C
   );
 });
 
+test('archive creation snapshots document data and all original sources before asynchronous hashing', async () => {
+  const { state, sources, bytes } = workspace();
+  const second = structuredClone(state.parts[0]);
+  second.id = 'second-part';
+  second.sourceId = 'second-source';
+  second.sourceName = 'second.dxf';
+  state.parts.push(second);
+  state.dimensions[second.id] = [];
+  state.selected.add(second.id);
+  const secondBytes = new Uint8Array([1, 2, 3, 4, 5]);
+  sources.add({ id: second.sourceId, name: second.sourceName, kind: 'dxf', bytes: secondBytes });
+  const originals = sources.all();
+  const expectedTitle = state.settings.title,
+    expectedPartName = state.parts[0].name;
+  const pending = createProjectArchive(state, originals);
+  state.settings.title = 'Edited while saving';
+  state.parts[0].name = 'Changed';
+  state.instructions[state.parts[0].id] = 'Unrelated new instruction';
+  for (const source of originals) {
+    source.bytes.fill(0);
+    source.name = 'Changed.step';
+    source.kind = 'step';
+  }
+  const opened = await openProjectArchive(await pending);
+  assert.equal(opened.project.settings.title, expectedTitle);
+  assert.equal(opened.project.parts[0].name, expectedPartName);
+  assert.notEqual(
+    opened.project.instructions[state.parts[0].id],
+    state.instructions[state.parts[0].id],
+  );
+  assert.deepEqual(opened.sources[0].bytes, bytes);
+  assert.deepEqual(opened.sources[1].bytes, secondBytes);
+});
+
+test('oversized source sets reject before source copying and before examining later invalid payloads', async () => {
+  const { state } = workspace();
+  const template = state.parts[0];
+  const payload = new Uint8Array(64 * 1024 * 1024);
+  const originals = Array.from({ length: 5 }, (_, index) => ({
+    id: `source-${index}`,
+    name: `source-${index}.dxf`,
+    kind: 'dxf' as const,
+    bytes: index === 4 ? new Uint8Array() : payload,
+  }));
+  state.parts = originals.map((source, index) => ({
+    ...structuredClone(template),
+    id: `part-${index}`,
+    sourceId: source.id,
+    sourceName: source.name,
+  }));
+  state.dimensions = Object.fromEntries(state.parts.map((part) => [part.id, []]));
+  state.annotations = {};
+  state.instructions = {};
+  state.selected = new Set(state.parts.map((part) => part.id));
+  await assert.rejects(createProjectArchive(state, originals), /256 MB archive content limit/);
+});
+
 test('missing originals are explicitly recorded and never fabricated from projected geometry', async () => {
   const { state } = workspace();
   const opened = await openProjectArchive(await createProjectArchive(state, []));

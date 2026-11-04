@@ -1,10 +1,11 @@
 import { strFromU8, strToU8, unzip, unzipSync, zip, type AsyncZippable } from 'fflate';
-import { parseProject, serializeProject, type ProjectData } from '../project';
+import { parseProject, snapshotProject, type ProjectData } from '../project';
+import { MAX_PROJECT_BYTES } from './project-limits';
 import type { WorkspaceState } from '../state';
-import type { DrawingAnnotation } from '../model';
 import {
   MAX_SOURCE_BYTES,
   validateSource,
+  inspectSource,
   type ProjectSource,
   type SourceKind,
 } from './source-repository';
@@ -40,10 +41,6 @@ export interface OpenedProjectArchive {
   description: string;
   missingSources: MissingProjectSource[];
 }
-type ArchiveState = WorkspaceState & {
-  annotations?: Record<string, DrawingAnnotation[]>;
-  description?: string;
-};
 const fail = (message: string): never => {
   throw new Error(`Invalid project archive: ${message}`);
 };
@@ -64,37 +61,48 @@ const missingSources = (project: ProjectData, sources: readonly ProjectSource[])
 
 /** One ZIP contains validated editable drawing data and byte-for-byte original CAD sources. */
 export async function createProjectArchive(
-  state: ArchiveState,
+  state: WorkspaceState,
   originals: readonly ProjectSource[],
   options: { description?: string } = {},
 ): Promise<Uint8Array> {
-  const text = serializeProject({
+  const project = snapshotProject({
     ...state,
-    description: options.description ?? state.description ?? '',
+    description: options.description ?? state.description,
   });
-  const project = parseProject(text);
-  const ids = new Set<string>();
-  const sources = originals
-    .filter((source) => {
-      if (ids.has(source.id)) throw new Error('Duplicate original source ID.');
-      ids.add(source.id);
-      return project.parts.some((part) => part.sourceId === source.id);
-    })
-    .map(validateSource);
+  const text = JSON.stringify({ version: 1, ...project });
+  if (text.length > MAX_PROJECT_BYTES) throw new Error('Project drawing data exceeds 100 MB.');
   const projectBytes = strToU8(text);
-  if (projectBytes.length > 100 * 1024 * 1024)
+  if (projectBytes.length > MAX_PROJECT_BYTES)
     throw new Error('Project drawing data exceeds 100 MB.');
+  const ids = new Set<string>();
+  const referenced: ProjectSource[] = [];
+  let sourceBytes = 0;
+  for (const source of originals) {
+    if (ids.has(source.id)) throw new Error('Duplicate original source ID.');
+    ids.add(source.id);
+    const linked = project.parts.filter((part) => part.sourceId === source.id);
+    if (!linked.length) continue;
+    const metadata = inspectSource(source);
+    if (
+      linked.some(
+        (part) =>
+          part.sourceName !== metadata.name || (part.sourceKind ?? 'step') !== metadata.kind,
+      )
+    )
+      throw new Error('An original source does not match its linked parts.');
+    referenced.push(source);
+    sourceBytes += metadata.size;
+    if (referenced.length > 1000 || sourceBytes + projectBytes.length > MAX_TOTAL)
+      throw new Error('The project exceeds the 256 MB archive content limit.');
+  }
+  // Reject oversized sets before copying their original buffers. Snapshot every
+  // accepted source before the first await so later caller edits cannot alter the ZIP.
+  const sources = referenced.map(validateSource);
   const files: AsyncZippable = Object.create(null);
   files[PROJECT_PATH] = projectBytes;
   const entries: SourceEntry[] = [];
   for (const source of sources) {
     const parts = project.parts.filter((part) => part.sourceId === source.id);
-    if (
-      parts.some(
-        (part) => part.sourceName !== source.name || (part.sourceKind ?? 'step') !== source.kind,
-      )
-    )
-      throw new Error('An original source does not match its linked parts.');
     const path = pathFor(source);
     files[path] = source.bytes;
     entries.push({
@@ -120,7 +128,7 @@ export async function createProjectArchive(
     throw new Error('Project source metadata exceeds 8 MB.');
   files[MANIFEST_PATH] = manifestBytes;
   files['README.txt'] = strToU8(
-    `TechDraw local project\n\n${project.settings.title || project.parts[0].name}\n\n${project.description || project.settings.notes}\n\nParts: ${project.parts.length}\nOriginal source files: ${sources.length}\nMissing originals: ${missing.length}\n\nproject.json contains dimensions, tolerances, annotations, title block and fixed sheet layouts.\nOriginal files in sources/ are preserved without modification.\nMissing original files cannot be reconstructed from projected drawing data.\n`,
+    `TechDraw local project\n\n${project.settings.title || project.parts[0].name}\n\n${project.description || project.settings.notes}\n\nParts: ${project.parts.length}\nOriginal source files: ${sources.length}\nMissing originals: ${missing.length}\n\nproject.json contains dimensions, tolerances, annotations, manufacturing profiles and instructions, title block and fixed sheet layouts.\nOriginal files in sources/ are preserved without modification.\nMissing original files cannot be reconstructed from projected drawing data.\n`,
   );
   const total =
     projectBytes.length +
@@ -164,7 +172,7 @@ export async function openProjectArchive(
           return fail('unrecognized files are present.');
         const limit =
           entry.name === PROJECT_PATH
-            ? 100 * 1024 * 1024
+            ? MAX_PROJECT_BYTES
             : entry.name === MANIFEST_PATH
               ? 8 * 1024 * 1024
               : entry.name === 'README.txt'

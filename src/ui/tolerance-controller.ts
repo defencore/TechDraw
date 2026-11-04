@@ -21,6 +21,7 @@ interface EditorContext {
 }
 interface DraftEntry {
   partId: string;
+  dimensionId: string;
   committed: string;
   draft: ToleranceDraft;
 }
@@ -56,6 +57,7 @@ export class ToleranceEditorController {
     if (this.drafts.get(key)?.committed !== committed)
       this.drafts.set(key, {
         partId: selection.partId,
+        dimensionId: selection.dimension.id,
         committed,
         draft: initialDraft(selection.dimension),
       });
@@ -267,6 +269,35 @@ export class ToleranceEditorController {
     const key = JSON.stringify([partId, dimensionId]);
     this.drafts.delete(key);
     if (this.mountedKey === key) this.mountedKey = undefined;
+  }
+
+  reconcilePart(partId: string, dimensions: readonly Dimension[]): void {
+    const byId = new Map(dimensions.map((dimension) => [dimension.id, dimension]));
+    for (const entry of this.drafts.values()) {
+      if (entry.partId !== partId) continue;
+      const dimension = byId.get(entry.dimensionId);
+      if (!dimension || entry.committed !== JSON.stringify(dimension.tolerance ?? null))
+        this.clearDimension(partId, entry.dimensionId);
+    }
+  }
+
+  hasPendingChanges(dimensions: Readonly<Record<string, Dimension[]>>): boolean {
+    this.capture();
+    for (const [partId, items] of Object.entries(dimensions)) this.reconcilePart(partId, items);
+    for (const entry of this.drafts.values()) {
+      const dimension = dimensions[entry.partId]?.find((item) => item.id === entry.dimensionId);
+      if (!dimension) continue;
+      try {
+        if (
+          JSON.stringify(this.parse({ partId: entry.partId, dimension })) !==
+          JSON.stringify(dimension.tolerance)
+        )
+          return true;
+      } catch {
+        return true;
+      }
+    }
+    return false;
   }
 
   clearPart(partId: string): void {

@@ -15,6 +15,33 @@ const dimension = (id = 'dimension'): Dimension => ({
   automatic: false,
 });
 
+test('hidden history steps invalidate stale tolerance drafts without discarding unrelated drafts', () => {
+  const app = workspace();
+  const original = app.selection()!;
+  app.controller.setMode('symmetric');
+  app.controller.setField('magnitude', '0.2');
+  app.controller.reconcilePart('part', [original.dimension]);
+  assert.equal(app.controller.draft()?.fields.magnitude, '0.2');
+  const changed: Dimension = {
+    ...original.dimension,
+    tolerance: { kind: 'symmetric', magnitude: '0.1' },
+  };
+  app.controller.reconcilePart('part', [changed]);
+  app.controller.reconcilePart('part', [original.dimension]);
+  assert.equal(app.controller.draft()?.mode, 'none');
+  assert.equal(app.controller.hasPendingChanges({ part: [original.dimension] }), false);
+});
+
+test('pending tolerance checks include invalid drafts and clear after an explicit apply', () => {
+  const app = workspace();
+  app.controller.setMode('symmetric');
+  app.controller.setField('magnitude', '-');
+  assert.equal(app.controller.hasPendingChanges({ part: [app.selection()!.dimension] }), true);
+  app.controller.setField('magnitude', '0.05');
+  app.controller.apply();
+  assert.equal(app.controller.hasPendingChanges({ part: [app.selection()!.dimension] }), false);
+});
+
 function workspace() {
   let selection: ToleranceSelection | undefined = { partId: 'part', dimension: dimension() };
   let commits = 0;

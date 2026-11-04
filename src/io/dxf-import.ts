@@ -1,5 +1,6 @@
 import type { Bounds2, ImportResult, Part, Point2, ProjectedEdge } from '../model';
 import { MAX_SOURCE_BYTES } from './source-repository';
+import { PROJECT_GEOMETRY_LIMITS as LIMITS } from './project-limits';
 
 export type DxfUnit = 'mm' | 'cm' | 'm' | 'in' | 'ft';
 export interface DxfImportOptions {
@@ -202,16 +203,20 @@ export function importDxf(
   };
   const anchor = (point: Point2) => {
     const key = point.map((coordinate) => coordinate.toPrecision(15)).join(',');
-    if (!anchors.has(key))
+    if (!anchors.has(key)) {
       anchors.set(key, {
         id: `dxf-anchor-${anchors.size}`,
         point: [...point],
         source: [point[0], 0, point[1]],
       });
+    }
   };
   const add = (edge: ProjectedEdge) => {
-    sampled += edge.points.length;
-    if (edges.length >= 40000 || sampled > 2000000)
+    sampled +=
+      edge.points.length + (edge.sourcePoints?.length ?? 0) + (edge.center && edge.radius ? 2 : 0);
+    if (edge.points.length > LIMITS.pointsPerEdge)
+      return fail('a curve exceeds the browser display point budget.');
+    if (edges.length >= LIMITS.edgesPerProjection || sampled > LIMITS.pointsPerProject)
       return fail('geometry exceeds the browser drawing budget.');
     edges.push(edge);
     if (edge.closed !== true) {
@@ -219,6 +224,8 @@ export function importDxf(
       anchor(edge.points.at(-1)!);
     }
     if (edge.center && edge.radius) {
+      if (circles.length >= LIMITS.circlesPerPart)
+        return fail('analytic circles exceed the browser drawing budget.');
       anchor(edge.center);
       circles.push({
         id: edge.id,
@@ -428,6 +435,15 @@ export function importDxf(
     }
   if (Object.values(bounds).some((value) => !Number.isFinite(value) || Math.abs(value) > 1e9))
     return fail('converted geometry exceeds the millimetre coordinate limit.');
+  const projectedAnchors = [...anchors.values()].filter(
+    (anchor) =>
+      anchor.point[0] >= bounds.minX &&
+      anchor.point[0] <= bounds.maxX &&
+      anchor.point[1] >= bounds.minY &&
+      anchor.point[1] <= bounds.maxY,
+  );
+  if (projectedAnchors.length > LIMITS.anchorsPerProjection)
+    return fail('snap points exceed the browser drawing budget.');
   const name = sourceName.replace(/\.dxf$/i, '');
   const part: Part = {
     id: crypto.randomUUID(),
@@ -444,13 +460,7 @@ export function importDxf(
         name: 'DXF source plane',
         bounds,
         edges,
-        anchors: [...anchors.values()].filter(
-          (anchor) =>
-            anchor.point[0] >= bounds.minX &&
-            anchor.point[0] <= bounds.maxX &&
-            anchor.point[1] >= bounds.minY &&
-            anchor.point[1] <= bounds.maxY,
-        ),
+        anchors: projectedAnchors,
       },
     ],
     warnings,

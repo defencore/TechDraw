@@ -1,5 +1,23 @@
 /** Interface copy only. Drawing content and user-entered document data are not translated. */
 export const ukMessages: Record<string, string> = {
+  'Opening the DXF example…': 'Відкриття прикладу DXF…',
+  'Saving project archive…': 'Збереження архіву проєкту…',
+  'The CAD engine could not start. Reload the page and try again.':
+    'Не вдалося запустити ядро CAD. Оновіть сторінку та спробуйте знову.',
+  'The CAD engine could not receive this file. Try importing it again.':
+    'Ядро CAD не змогло отримати цей файл. Спробуйте імпортувати його знову.',
+  'The CAD engine returned unreadable data. Try importing the STEP file again.':
+    'Ядро CAD повернуло дані, які не вдалося прочитати. Імпортуйте STEP-файл знову.',
+  'The CAD engine stopped unexpectedly. Try a smaller STEP file or reload the page.':
+    'Ядро CAD несподівано зупинилося. Спробуйте менший STEP-файл або оновіть сторінку.',
+  'Choose a nonempty STEP file no larger than 64 MB.':
+    'Виберіть непорожній STEP-файл розміром до 64 МБ.',
+  'snap points exceed the browser drawing budget.':
+    'Кількість точок прив’язки перевищує допустимий обсяг креслення для браузера.',
+  'analytic circles exceed the browser drawing budget.':
+    'Кількість аналітичних кіл перевищує допустимий обсяг креслення для браузера.',
+  'a curve exceeds the browser display point budget.':
+    'Крива містить забагато точок для відображення в браузері.',
   'Standoff and extension interfaces': 'Приєднувальні поверхні стійки та подовжувача',
   Nut: 'Гайка',
   'Across flats and wrench interface': 'Розмір під ключ і поверхні для інструмента',

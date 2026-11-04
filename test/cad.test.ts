@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import { test, before } from 'node:test';
 import initOpenCascade from 'replicad-opencascadejs';
-import { exportSTEP, makeBaseBox, makeCylinder, setOC } from 'replicad';
+import { exportSTEP, getOC, makeBaseBox, makeCylinder, setOC } from 'replicad';
 import { cleanProjectedEdges, importStep } from '../src/cad/engine';
 import type { ProjectedEdge } from '../src/model';
 import { readStepProducts, stepPartDisplayName } from '../src/cad/step-metadata';
@@ -23,6 +23,31 @@ const near = (actual: number, expected: number, tolerance = 1e-6) =>
     Math.abs(actual - expected) < tolerance,
     `${actual} must equal ${expected} within ${tolerance}`,
   );
+
+test('topology hash collisions preserve distinct placed geometry and still deduplicate shared edge occurrences', async () => {
+  const oc = getOC(),
+    original = oc.ReplicadShapeHasher.HashCode;
+  const shape = makeBaseBox(30, 20, 10);
+  let calls = 0;
+  try {
+    const source = exportSTEP([{ shape, name: 'Collision test block' }], {
+      unit: 'MM',
+      modelUnit: 'MM',
+    });
+    oc.ReplicadShapeHasher.HashCode = () => {
+      calls++;
+      return 1;
+    };
+    const result = await importStep(await source.arrayBuffer(), 'collision-test.step');
+    assert.ok(calls > 0);
+    assert.equal(result.parts.length, 1);
+    for (const view of result.parts[0].views) assert.equal(view.anchors?.length, 8);
+    near(result.parts[0].bounds.max[0] - result.parts[0].bounds.min[0], 30);
+  } finally {
+    oc.ReplicadShapeHasher.HashCode = original;
+    shape.delete();
+  }
+});
 
 test('real STEP preserves nominal dimensions, component placement, products and four HLR views', async () => {
   const bytes = await fs.readFile(new URL('../public/examples/mounting-kit.step', import.meta.url));

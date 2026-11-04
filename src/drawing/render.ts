@@ -228,6 +228,8 @@ export function renderDrawing(
   const page = drawingPage(settings, part);
   const { width, height, left, right, top, bottom, blockHeight } = page;
   const { minX: clipLeft, minY: clipTop, maxX: clipRight, maxY: clipBottom } = page.content;
+  const clipWidth = Math.max(0, clipRight - clipLeft),
+    clipHeight = Math.max(0, clipBottom - clipTop);
   const gost = isGostTemplate(settings.template);
   const calculated = layoutOverride
     ? undefined
@@ -410,7 +412,7 @@ export function renderDrawing(
   const header = gost
     ? ''
     : `<g stroke="none">${text(left + 3, top + 5, `${templateName} · ${part.sourceName}`.slice(0, 100), 2.2, 'fill="#7a838a"')}${text(width - right - 3, top + 5, 'GEOMETRIC DRAFT · REVIEW REQUIRED', 2.2, 'text-anchor="end" fill="#7a838a"')}</g>`;
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}mm" height="${height}mm" viewBox="0 0 ${width} ${height}" role="img" aria-label="Technical drawing of ${escapeXml(part.name)}" style="font-family:Arial,Helvetica,sans-serif;background:white;color:#20262b"><defs><clipPath id="sheet-content"><rect x="${clipLeft}" y="${clipTop}" width="${clipRight - clipLeft}" height="${clipBottom - clipTop}"/></clipPath></defs><rect width="${width}" height="${height}" fill="white"/><g fill="#20262b" stroke="#20262b"><rect x="${left}" y="${top}" width="${width - left - right}" height="${height - top - bottom}" fill="none" stroke-width=".5"/>${header}<g clip-path="url(#sheet-content)" stroke="none">${views}</g>${page.parameterTable ? renderParameterTable(page.parameterTable) : ''}<g stroke="none">${noteMarkup}</g>${titleBlock}</g></svg>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}mm" height="${height}mm" viewBox="0 0 ${width} ${height}" role="img" aria-label="Technical drawing of ${escapeXml(part.name)}" style="font-family:Arial,Helvetica,sans-serif;background:white;color:#20262b"><defs><clipPath id="sheet-content"><rect x="${clipLeft}" y="${clipTop}" width="${clipWidth}" height="${clipHeight}"/></clipPath></defs><rect width="${width}" height="${height}" fill="white"/><g fill="#20262b" stroke="#20262b"><rect x="${left}" y="${top}" width="${width - left - right}" height="${height - top - bottom}" fill="none" stroke-width=".5"/>${header}<g clip-path="url(#sheet-content)" stroke="none">${views}</g>${page.parameterTable ? renderParameterTable(page.parameterTable) : ''}<g stroke="none">${noteMarkup}</g>${titleBlock}</g></svg>`;
   const annotated = applyDrawingAppearance(svg, options.appearance).replace(
     '</svg>',
     `${renderAnnotations(options.annotations ?? [], options.appearance)}</svg>`,

@@ -41,6 +41,8 @@ export function setLanguage(next: UiLanguage, storage?: Pick<Storage, 'setItem'>
 function translated(text: string): string {
   if (Object.hasOwn(ukMessages, text)) return ukMessages[text];
   const rules: [RegExp, (...values: string[]) => string][] = [
+    [/^(.+\.(?:step|stp|dxf)): (.+)$/is, (file, reason) => `${file}: ${translated(reason)}`],
+    [/^Cannot import DXF: (.*)$/s, (reason) => `Не вдалося імпортувати DXF: ${translated(reason)}`],
     [
       /^Gear manufacturing data is incomplete: (.+)\. Specify these values before manufacture\.$/,
       (labels) =>

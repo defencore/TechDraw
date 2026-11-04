@@ -46,7 +46,7 @@ export class PartTypeEditorController {
   }
 
   /** History may replace committed values without changing the selected profile type. */
-  private reconcile(part: Part): void {
+  reconcile(part: Part): void {
     for (const [id, entry] of this.drafts)
       if (entry.partId === part.id && entry.committed !== baseline(part, entry.type))
         this.drafts.delete(id);
@@ -167,6 +167,28 @@ export class PartTypeEditorController {
       this.drafts.delete(key(entry.partId, entry.type));
     }
     return changed;
+  }
+
+  hasPendingChanges(parts: readonly Part[]): boolean {
+    for (const part of parts) this.reconcile(part);
+    for (const entry of this.drafts.values()) {
+      const part = parts.find((part) => part.id === entry.partId);
+      if (!part) continue;
+      try {
+        const profile = parseManufacturingProfile(entry.type, entry.profile);
+        const candidate = {
+          ...part,
+          manufacturing: {
+            type: part.manufacturing?.type ?? 'auto',
+            profiles: { ...part.manufacturing?.profiles, [entry.type]: profile },
+          },
+        };
+        if (baseline(candidate, entry.type) !== baseline(part, entry.type)) return true;
+      } catch {
+        return true;
+      }
+    }
+    return false;
   }
 
   clearPart(partId: string): void {

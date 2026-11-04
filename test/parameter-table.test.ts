@@ -413,3 +413,36 @@ test('supplemental Gear text participates in the shared page reservation and ove
     ),
   );
 });
+
+test('an overflowing narrow-sheet table keeps SVG clipping valid while exposing its fit error', () => {
+  const part = samplePart();
+  part.manufacturing = {
+    type: 'custom',
+    profiles: {
+      custom: {
+        fields: {},
+        parameters: Array.from({ length: 20 }, (_, index) => ({
+          id: `requirement-${index}`,
+          label: `Requirement ${index}`,
+          value: 'A detailed entered requirement. '.repeat(12),
+        })),
+      },
+    },
+  };
+  const settings = { ...defaultSettings, format: 'A4' as const, orientation: 'portrait' as const };
+  const rendered = renderDrawing(part, [], settings);
+  assert.ok(
+    rendered.warnings.some((warning) =>
+      warning.startsWith('Manufacturing parameter table exceeds'),
+    ),
+  );
+  const clip = /<clipPath id="sheet-content"><rect[^>]*width="([^"]+)" height="([^"]+)"/.exec(
+    rendered.svg,
+  )!;
+  assert.ok(Number(clip[1]) >= 0);
+  assert.equal(
+    Number(clip[2]),
+    0,
+    'An impossible drawing area must be empty, rather than a negative SVG rectangle',
+  );
+});

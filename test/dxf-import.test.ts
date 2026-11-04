@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import { importDxf, inspectDxfUnits } from '../src/io/dxf-import';
 import { parseProject, serializeProject } from '../src/project';
 import { defaultSettings } from '../src/state';
+import { PROJECT_GEOMETRY_LIMITS as LIMITS } from '../src/io/project-limits';
 
 export function dxf(entities: (string | number)[], code = 4, tables: (string | number)[] = []) {
   return new TextEncoder().encode(
@@ -259,4 +260,23 @@ test('the original public inspection plate has exact nominal envelope, holes and
   const corners = part.views[0].edges.filter((edge) => edge.kind === 'circle' && !edge.closed);
   assert.equal(corners.length, 4);
   for (const corner of corners) near(corner.radius!, 5);
+});
+
+test('DXF snap and analytic-feature budgets fail during import instead of creating unsavable projects', () => {
+  const lines: (string | number)[] = [];
+  for (let index = 0; index <= LIMITS.anchorsPerProjection / 2; index++)
+    lines.push(0, 'LINE', 10, index * 3, 20, 0, 11, index * 3 + 1, 21, 0);
+  assert.throws(() => importDxf(dxf(lines), 'too-many-snaps.dxf'), /snap points exceed/);
+  const circles: (string | number)[] = [];
+  for (let index = 0; index <= LIMITS.circlesPerPart; index++)
+    circles.push(0, 'CIRCLE', 10, index * 3, 20, 0, 40, 1);
+  assert.throws(() => importDxf(dxf(circles), 'too-many-circles.dxf'), /analytic circles exceed/);
+});
+
+test('arc extrema samples are included in the serialized per-edge point budget', () => {
+  const radius = 0.005 / (1 - Math.cos(Math.PI / (LIMITS.pointsPerEdge - 2)));
+  assert.throws(
+    () => importDxf(dxf([0, 'CIRCLE', 10, 0, 20, 0, 40, radius]), 'dense-circle.dxf'),
+    /point budget|sampling budget/,
+  );
 });

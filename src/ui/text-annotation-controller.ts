@@ -87,6 +87,18 @@ export class TextAnnotationEditorController {
     return Boolean(this.dialog?.open);
   }
 
+  get hasPendingChanges(): boolean {
+    if (!this.dialog || !this.session) return false;
+    const draft = this.values();
+    if (!this.session.annotation) return Boolean(draft.text.trim());
+    const original = this.session.annotation;
+    return (
+      draft.text !== original.text ||
+      draft.color !== (original.color ?? this.session.options.color) ||
+      draft.fontSize !== original.fontSize
+    );
+  }
+
   open(session: TextAnnotationSession): void {
     if (this.dialog) return;
     if (session.annotation?.locked) return;

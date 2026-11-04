@@ -17,4 +17,4 @@ export const field = (
 ) =>
   `<label class="field"><span>${e(t(label))}</span><input maxlength="1024" data-setting="${key}" value="${e(value)}" placeholder="${e(userPlaceholder ? placeholder : t(placeholder))}"${userPlaceholder ? ' data-user-placeholder' : ''} /></label>`;
 export const option = (value: string | number, label: string, current: unknown) =>
-  `<option value="${value}" ${String(current) === String(value) ? 'selected' : ''}>${e(t(label))}</option>`;
+  `<option value="${e(value)}" ${String(current) === String(value) ? 'selected' : ''}>${e(t(label))}</option>`;

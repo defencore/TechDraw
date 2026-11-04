@@ -1,4 +1,12 @@
-import { cast, getOC, ProjectionCamera, lookFromPlane, type AnyShape, type Edge } from 'replicad';
+import {
+  cast,
+  getOC,
+  HASH_CODE_MAX,
+  ProjectionCamera,
+  lookFromPlane,
+  type AnyShape,
+  type Edge,
+} from 'replicad';
 import type {
   ImportResult,
   Part,
@@ -40,11 +48,22 @@ function subShapes(shape: AnyShape, kind: TopAbs_ShapeEnum): AnyShape[] {
   const oc = getOC();
   const explorer = new oc.TopExp_Explorer(shape.wrapped, kind, oc.TopAbs_ShapeEnum.TopAbs_SHAPE);
   const output: AnyShape[] = [];
+  const buckets = new Map<number, AnyShape[]>();
   try {
     while (explorer.More()) {
       const raw = explorer.Current();
-      if (output.some((item) => item.wrapped.IsSame(raw))) raw.delete();
-      else output.push(ownedShape(raw));
+      try {
+        const hash = oc.ReplicadShapeHasher.HashCode(raw, HASH_CODE_MAX);
+        const bucket = buckets.get(hash) ?? [];
+        if (!bucket.some((item) => item.wrapped.IsSame(raw))) {
+          const item = cast(raw);
+          output.push(item);
+          bucket.push(item);
+          buckets.set(hash, bucket);
+        }
+      } finally {
+        raw.delete();
+      }
       explorer.Next();
     }
     return output;
@@ -184,6 +203,8 @@ function projectedEdges(
   const algorithm = new oc.HLRBRep_Algo();
   const projector = new oc.HLRAlgo_Projector(camera.wrapped);
   let converter: InstanceType<typeof oc.HLRBRep_HLRToShape> | undefined;
+  const acquired: Edge[] = [];
+  let returned = false;
   try {
     algorithm.Add(shape.wrapped, 0);
     algorithm.Projector(projector);
@@ -201,13 +222,14 @@ function projectedEdges(
         const wrapped = ownedShape(raw);
         try {
           const edges = edgesOf(wrapped);
+          acquired.push(...edges);
           edges.forEach((edge) => oc.BRepLib.BuildCurves3d(edge.wrapped));
           return edges;
         } finally {
           wrapped.delete();
         }
       });
-    return {
+    const result = {
       // G1 tangent boundaries are not physical sharp edges. Keep hard edges and
       // apparent contours; surface seams and tangent joins are intentionally omitted.
       visible: [
@@ -225,7 +247,10 @@ function projectedEdges(
         })),
       ],
     };
+    returned = true;
+    return result;
   } finally {
+    if (!returned) acquired.forEach((edge) => edge.delete());
     converter?.delete();
     projector.delete();
     algorithm.delete();
@@ -350,113 +375,116 @@ function project(
 ): Projection {
   const camera =
     id === 'iso' ? new ProjectionCamera([0, 0, 0], [1, -1, 1], [1, 1, 0]) : lookFromPlane(id);
-  const x = point(camera.xAxis),
-    y = point(camera.yAxis);
-  const dot = (p: Point3, axis: Point3) => p[0] * axis[0] + p[1] * axis[1] + p[2] * axis[2];
-  const to2d = (source: Point3): Point2 => [dot(source, x), dot(source, y)];
-  const lineKey = (a: Point2, b: Point2): string => {
-    const length = Math.hypot(b[0] - a[0], b[1] - a[1]);
-    if (length < 1e-9) return '';
-    const sign = b[0] < a[0] - 1e-9 || (Math.abs(b[0] - a[0]) < 1e-9 && b[1] < a[1]) ? -1 : 1;
-    const ux = ((b[0] - a[0]) / length) * sign,
-      uy = ((b[1] - a[1]) / length) * sign;
-    return `${Math.round(ux * 1e5)},${Math.round(uy * 1e5)},${Math.round((-uy * a[0] + ux * a[1]) * 1e4)}`;
-  };
-  const lineGroups = new Map<string, { source: SourceLine; a: Point2; b: Point2 }[]>();
-  for (const source of sourceLines) {
-    const a = to2d(source[0]),
-      b = to2d(source[1]),
-      key = lineKey(a, b);
-    if (key) lineGroups.set(key, [...(lineGroups.get(key) || []), { source, a, b }]);
-  }
-  const attachSource = (edge: ProjectedEdge) => {
-    if (edge.kind !== 'line') return;
-    // Empty evidence distinguishes new projection-only strokes from older saved projects.
-    edge.sourcePoints = [];
-    const p = edge.points[0],
-      q = edge.points.at(-1)!;
-    const candidates: { source: SourceLine; length: number }[] = [];
-    for (const line of lineGroups.get(lineKey(p, q)) || []) {
-      const dx = line.b[0] - line.a[0],
-        dy = line.b[1] - line.a[1],
-        squared = dx * dx + dy * dy;
-      const parameter = (at: Point2) =>
-        ((at[0] - line.a[0]) * dx + (at[1] - line.a[1]) * dy) / squared;
-      const t = parameter(p),
-        u = parameter(q);
-      if (Math.min(t, u) < -1e-7 || Math.max(t, u) > 1 + 1e-7) continue;
-      if (
-        distanceToSegment(p, line.a, line.b) > 1e-5 ||
-        distanceToSegment(q, line.a, line.b) > 1e-5
-      )
-        continue;
-      const interpolate = (v: number): Point3 =>
-        [0, 1, 2].map(
-          (axis) => line.source[0][axis] + v * (line.source[1][axis] - line.source[0][axis]),
-        ) as Point3;
-      const a = interpolate(t),
-        b = interpolate(u);
-      candidates.push({
-        source: [a, b],
-        length: Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]),
-      });
-    }
-    if (
-      candidates.length &&
-      candidates.every((candidate) => Math.abs(candidate.length - candidates[0].length) < 1e-5)
-    ) {
-      edge.sourcePoints = candidates[0].source;
-      edge.length = candidates[0].length;
-    }
-  };
-  const projected = projectedEdges(shape, camera);
-  const edges: ProjectedEdge[] = [];
   try {
-    for (const [hidden, items] of [
-      [false, projected.visible],
-      [true, projected.hidden],
-    ] as const) {
-      for (const item of items) {
-        const serialized = Object.assign(
-          serializeEdge(item.edge, hidden, `${id}-${hidden ? 'h' : 'v'}-${edges.length}`),
-          { role: item.role },
-        );
-        edges.push(serialized);
-      }
-    }
-    if (!edges.length) throw new Error(`${name} projection contains no drawable geometry.`);
-    // Kernel bounds include exact extrema even when a curve's sampled points miss an extremum.
-    let minX = Infinity,
-      minY = Infinity,
-      maxX = -Infinity,
-      maxY = -Infinity;
-    for (const item of [...projected.visible, ...projected.hidden]) {
-      const box = item.edge.boundingBox;
-      try {
-        const [lo, hi] = box.bounds;
-        minX = Math.min(minX, lo[0]);
-        minY = Math.min(minY, lo[1]);
-        maxX = Math.max(maxX, hi[0]);
-        maxY = Math.max(maxY, hi[1]);
-      } finally {
-        box.delete();
-      }
-    }
-    const cleanEdges = cleanProjectedEdges(edges);
-    cleanEdges.forEach(attachSource);
-    return {
-      id,
-      name,
-      edges: cleanEdges,
-      bounds: { minX, minY, maxX, maxY },
-      anchors: sourceVertices.map((source, i) => ({
-        id: `${id}-vertex-${i}`,
-        source,
-        point: to2d(source),
-      })),
+    const x = point(camera.xAxis),
+      y = point(camera.yAxis);
+    const dot = (p: Point3, axis: Point3) => p[0] * axis[0] + p[1] * axis[1] + p[2] * axis[2];
+    const to2d = (source: Point3): Point2 => [dot(source, x), dot(source, y)];
+    const lineKey = (a: Point2, b: Point2): string => {
+      const length = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      if (length < 1e-9) return '';
+      const sign = b[0] < a[0] - 1e-9 || (Math.abs(b[0] - a[0]) < 1e-9 && b[1] < a[1]) ? -1 : 1;
+      const ux = ((b[0] - a[0]) / length) * sign,
+        uy = ((b[1] - a[1]) / length) * sign;
+      return `${Math.round(ux * 1e5)},${Math.round(uy * 1e5)},${Math.round((-uy * a[0] + ux * a[1]) * 1e4)}`;
     };
+    const lineGroups = new Map<string, { source: SourceLine; a: Point2; b: Point2 }[]>();
+    for (const source of sourceLines) {
+      const a = to2d(source[0]),
+        b = to2d(source[1]),
+        key = lineKey(a, b);
+      if (key) lineGroups.set(key, [...(lineGroups.get(key) || []), { source, a, b }]);
+    }
+    const attachSource = (edge: ProjectedEdge) => {
+      if (edge.kind !== 'line') return;
+      // Empty evidence distinguishes new projection-only strokes from older saved projects.
+      edge.sourcePoints = [];
+      const p = edge.points[0],
+        q = edge.points.at(-1)!;
+      const candidates: { source: SourceLine; length: number }[] = [];
+      for (const line of lineGroups.get(lineKey(p, q)) || []) {
+        const dx = line.b[0] - line.a[0],
+          dy = line.b[1] - line.a[1],
+          squared = dx * dx + dy * dy;
+        const parameter = (at: Point2) =>
+          ((at[0] - line.a[0]) * dx + (at[1] - line.a[1]) * dy) / squared;
+        const t = parameter(p),
+          u = parameter(q);
+        if (Math.min(t, u) < -1e-7 || Math.max(t, u) > 1 + 1e-7) continue;
+        if (
+          distanceToSegment(p, line.a, line.b) > 1e-5 ||
+          distanceToSegment(q, line.a, line.b) > 1e-5
+        )
+          continue;
+        const interpolate = (v: number): Point3 =>
+          [0, 1, 2].map(
+            (axis) => line.source[0][axis] + v * (line.source[1][axis] - line.source[0][axis]),
+          ) as Point3;
+        const a = interpolate(t),
+          b = interpolate(u);
+        candidates.push({
+          source: [a, b],
+          length: Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]),
+        });
+      }
+      if (
+        candidates.length &&
+        candidates.every((candidate) => Math.abs(candidate.length - candidates[0].length) < 1e-5)
+      ) {
+        edge.sourcePoints = candidates[0].source;
+        edge.length = candidates[0].length;
+      }
+    };
+    const projected = projectedEdges(shape, camera);
+    const edges: ProjectedEdge[] = [];
+    try {
+      for (const [hidden, items] of [
+        [false, projected.visible],
+        [true, projected.hidden],
+      ] as const) {
+        for (const item of items) {
+          const serialized = Object.assign(
+            serializeEdge(item.edge, hidden, `${id}-${hidden ? 'h' : 'v'}-${edges.length}`),
+            { role: item.role },
+          );
+          edges.push(serialized);
+        }
+      }
+      if (!edges.length) throw new Error(`${name} projection contains no drawable geometry.`);
+      // Kernel bounds include exact extrema even when a curve's sampled points miss an extremum.
+      let minX = Infinity,
+        minY = Infinity,
+        maxX = -Infinity,
+        maxY = -Infinity;
+      for (const item of [...projected.visible, ...projected.hidden]) {
+        const box = item.edge.boundingBox;
+        try {
+          const [lo, hi] = box.bounds;
+          minX = Math.min(minX, lo[0]);
+          minY = Math.min(minY, lo[1]);
+          maxX = Math.max(maxX, hi[0]);
+          maxY = Math.max(maxY, hi[1]);
+        } finally {
+          box.delete();
+        }
+      }
+      const cleanEdges = cleanProjectedEdges(edges);
+      cleanEdges.forEach(attachSource);
+      return {
+        id,
+        name,
+        edges: cleanEdges,
+        bounds: { minX, minY, maxX, maxY },
+        anchors: sourceVertices.map((source, i) => ({
+          id: `${id}-vertex-${i}`,
+          source,
+          point: to2d(source),
+        })),
+      };
+    } finally {
+      for (const item of [...projected.visible, ...projected.hidden]) item.edge.delete();
+    }
   } finally {
-    for (const item of [...projected.visible, ...projected.hidden]) item.edge.delete();
     camera.delete();
   }
 }
@@ -495,72 +523,77 @@ function toPart(
   const oc = getOC();
   const edgeCount = edgesOf(shape);
   const count = edgeCount.length;
-  const sourceLines: SourceLine[] = [];
-  const sourceCircles: SourceCircle[] = [];
-  for (const edge of edgeCount) {
-    const adaptor = new oc.BRepAdaptor_Curve(edge.wrapped);
-    try {
-      if (adaptor.GetType() === oc.GeomAbs_CurveType.GeomAbs_Circle) {
-        const circle = adaptor.Circle(),
-          center = circle.Location(),
-          axis = circle.Axis(),
-          normal = axis.Direction();
-        try {
-          const feature: SourceCircle = {
-            id: `source-circle-${sourceCircles.length}`,
-            center: [center.X(), center.Y(), center.Z()],
-            normal: [normal.X(), normal.Y(), normal.Z()],
-            radius: circle.Radius(),
-            closed:
-              Math.abs(adaptor.LastParameter() - adaptor.FirstParameter()) >= 2 * Math.PI - 1e-7,
-          };
-          // A circle axis is unoriented: +N and -N describe the same feature plane.
-          if (
-            !sourceCircles.some(
-              (other) =>
-                other.closed === feature.closed &&
-                Math.abs(other.radius - feature.radius) < 1e-7 &&
-                Math.hypot(...other.center.map((value, axis) => value - feature.center[axis])) <
-                  1e-7 &&
-                Math.abs(
-                  Math.abs(
-                    other.normal.reduce(
-                      (sum, value, axis) => sum + value * feature.normal[axis],
-                      0,
-                    ),
-                  ) - 1,
-                ) < 1e-9,
-            )
-          )
-            sourceCircles.push(feature);
-        } finally {
-          normal.delete();
-          axis.delete();
-          center.delete();
-          circle.delete();
-        }
-      }
-      if (adaptor.GetType() !== oc.GeomAbs_CurveType.GeomAbs_Line) continue;
-      const a = adaptor.Value(adaptor.FirstParameter()),
-        b = adaptor.Value(adaptor.LastParameter());
-      try {
-        sourceLines.push([
-          [a.X(), a.Y(), a.Z()],
-          [b.X(), b.Y(), b.Z()],
-        ]);
-      } finally {
-        a.delete();
-        b.delete();
-      }
-    } finally {
-      adaptor.delete();
-    }
-  }
-  edgeCount.forEach((edge) => edge.delete());
-  if (count > MAX_EDGES_PER_PART)
+  if (count > MAX_EDGES_PER_PART) {
+    edgeCount.forEach((edge) => edge.delete());
     throw new Error(
       `Part ${index + 1} contains ${count} edges. Split this model into smaller STEP files (limit: ${MAX_EDGES_PER_PART} edges per part).`,
     );
+  }
+  const sourceLines: SourceLine[] = [];
+  const sourceCircles: SourceCircle[] = [];
+  try {
+    for (const edge of edgeCount) {
+      const adaptor = new oc.BRepAdaptor_Curve(edge.wrapped);
+      try {
+        if (adaptor.GetType() === oc.GeomAbs_CurveType.GeomAbs_Circle) {
+          const circle = adaptor.Circle(),
+            center = circle.Location(),
+            axis = circle.Axis(),
+            normal = axis.Direction();
+          try {
+            const feature: SourceCircle = {
+              id: `source-circle-${sourceCircles.length}`,
+              center: [center.X(), center.Y(), center.Z()],
+              normal: [normal.X(), normal.Y(), normal.Z()],
+              radius: circle.Radius(),
+              closed:
+                Math.abs(adaptor.LastParameter() - adaptor.FirstParameter()) >= 2 * Math.PI - 1e-7,
+            };
+            // A circle axis is unoriented: +N and -N describe the same feature plane.
+            if (
+              !sourceCircles.some(
+                (other) =>
+                  other.closed === feature.closed &&
+                  Math.abs(other.radius - feature.radius) < 1e-7 &&
+                  Math.hypot(...other.center.map((value, axis) => value - feature.center[axis])) <
+                    1e-7 &&
+                  Math.abs(
+                    Math.abs(
+                      other.normal.reduce(
+                        (sum, value, axis) => sum + value * feature.normal[axis],
+                        0,
+                      ),
+                    ) - 1,
+                  ) < 1e-9,
+              )
+            )
+              sourceCircles.push(feature);
+          } finally {
+            normal.delete();
+            axis.delete();
+            center.delete();
+            circle.delete();
+          }
+        }
+        if (adaptor.GetType() !== oc.GeomAbs_CurveType.GeomAbs_Line) continue;
+        const a = adaptor.Value(adaptor.FirstParameter()),
+          b = adaptor.Value(adaptor.LastParameter());
+        try {
+          sourceLines.push([
+            [a.X(), a.Y(), a.Z()],
+            [b.X(), b.Y(), b.Z()],
+          ]);
+        } finally {
+          a.delete();
+          b.delete();
+        }
+      } finally {
+        adaptor.delete();
+      }
+    }
+  } finally {
+    edgeCount.forEach((edge) => edge.delete());
+  }
   const gear = analyzeGearShape(shape);
   const warnings: string[] = [];
   const analyzer = new oc.BRepCheck_Analyzer(shape.wrapped, true, false, false);

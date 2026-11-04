@@ -6,13 +6,15 @@ import './ui/text-annotation-editor.css';
 import './ui/gear-editor.css';
 import './ui/part-type-editor.css';
 import { createCadClient } from './cad/client';
+import { WorkspaceFiles, drawingFileName } from './application/workspace-files';
+import { WorkspaceSaveState } from './application/workspace-save-state';
 import { refreshDimensionSuggestions } from './drawing/suggestions';
 import { renderDrawingFeedback } from './ui/drawing-feedback';
 import { ToleranceEditorController } from './ui/tolerance-controller';
 import { TextAnnotationEditorController } from './ui/text-annotation-controller';
-import { PartTypeEditorController } from './ui/part-type-controller';
-import { renderPartTypeEditor } from './ui/part-type-editor';
-import { effectivePartType } from './manufacturing/catalog';
+import { ManufacturingEditorController } from './ui/manufacturing-editor-controller';
+import { WorkspaceViewState } from './ui/workspace-view-state';
+import { nextInspectorTab, renderInspectorTabs } from './ui/inspector-tabs';
 import { DimensionSelection } from './ui/dimension-selection';
 import type { GridSettings } from './ui/drawing-grid';
 import { isGridSpacing } from './drawing/grid-coordinates';
@@ -40,7 +42,6 @@ import {
 } from './ui/title-block-cache';
 import { renderDrawing } from './drawing/render';
 import { DrawingCanvas, type CanvasTool } from './ui/drawing-canvas';
-import { parseProject, parsePartInstructions } from './project';
 import type { Dimension, DrawingSettings, Point2 } from './model';
 import { defaultSettings, type WorkspaceState } from './state';
 import { WorkspaceDocument } from './workspace-document';
@@ -65,15 +66,6 @@ import { renderDrawingViewerControls } from './ui/viewer-controls';
 import { renderMarkupGuide } from './ui/markup-guide';
 import { DEFAULT_ANNOTATION_COLOR } from './drawing/annotation-style';
 import { GRID_PRESETS } from './ui/grid-spacing-editor';
-import { renderManufacturingInstructions } from './ui/manufacturing-instructions';
-import {
-  renderGearEditor,
-  captureGearEditor,
-  parseGearEditorDraft,
-  handleGearEditorClick,
-  syncGearEditorType,
-  type GearEditorDraft,
-} from './ui/gear-editor';
 import type { DrawingAppearance } from './drawing/appearance';
 import type { DrawingAnnotation } from './model';
 import {
@@ -81,9 +73,7 @@ import {
   readAnnotationEdit,
   readAnnotationOptions,
 } from './ui/annotation-editor';
-import { SourceRepository } from './io/source-repository';
-import { createProjectArchive, openProjectArchive } from './io/project-archive';
-import { importDxf, type DxfUnit } from './io/dxf-import';
+import type { DxfUnit } from './io/dxf-import';
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
 const titleBlockStorage = (() => {
@@ -106,7 +96,8 @@ const state: WorkspaceState = {
 };
 setLanguage(readLanguage(titleBlockStorage), titleBlockStorage);
 const workspaceDocument = new WorkspaceDocument(state);
-const sources = new SourceRepository();
+const saveState = new WorkspaceSaveState(state);
+const viewState = new WorkspaceViewState();
 let titleBlockCached = saveTitleBlockCache(titleBlockStorage, state.settings);
 let theme = readPreference<string>(
   'theme',
@@ -119,12 +110,8 @@ const dimensionSelection = new DimensionSelection();
 let grid = readGridPreferences(titleBlockStorage);
 let customGrid = !GRID_PRESETS.some((spacing) => spacing === grid.spacing);
 const placement: PlacementControls = { view: 'front', mode: 'cascade', gap: 7 };
-let busy = false;
-let busyOperation: 'import' | 'export' | 'prepare' = 'import';
 let autoDetail: 'balanced' | 'full' = 'balanced';
 const collapsedBranches = new Set<string>();
-let progress = '';
-let importToken = 0;
 let canvasHint = 'Drop STEP files anywhere in the workspace';
 let notification = '';
 let toastTimer: ReturnType<typeof setTimeout>;
@@ -135,6 +122,7 @@ let viewerMode = false;
 let viewerGeneration = 0;
 let viewerFocusSnapshot = false;
 let selectedAnnotation: string | undefined;
+let lastShownPartId: string | null = null;
 let drawingAppearance: 'auto' | DrawingAppearance = 'auto';
 let exportAppearance: DrawingAppearance = 'paper';
 let dxfUnit: DxfUnit | undefined;
@@ -144,12 +132,39 @@ const annotationOptions = {
   strokeWidth: 0.5,
   color: DEFAULT_ANNOTATION_COLOR,
 };
-const instructionDrafts = new Map<string, string>();
-const gearDrafts = new Map<string, GearEditorDraft>();
 const dimensionFilter = { ...defaultDimensionFilter };
-const cad = createCadClient((message: string) => {
-  progress = message;
-  updateProgress();
+const cad = createCadClient((message) => files.updateProgress(message));
+const files = new WorkspaceFiles({
+  document: workspaceDocument,
+  cad,
+  blocked: () => viewerMode,
+  dxfUnit: () => dxfUnit,
+  appearance: () => exportAppearance,
+  changed: render,
+  progressChanged: updateProgress,
+  imported() {
+    drawingCanvas.cancel();
+    dimensionSelection.clear();
+    selectedAnnotation = undefined;
+    tool = 'select';
+  },
+  opened() {
+    manufacturingEditors.clear();
+    toleranceEditor.reset();
+    const savedOrientation = state.settings.orientation;
+    normalizeSheetOrientation();
+    if (savedOrientation !== state.settings.orientation) state.layouts = {};
+    cacheTitleBlock();
+    drawingCanvas.cancel();
+    dimensionSelection.clear();
+    selectedAnnotation = undefined;
+    tool = 'select';
+  },
+  saved: () => saveState.markSaved(state),
+  report: toast,
+  translate: (message) => t(message),
+  download: downloadBlob,
+  exampleUrl: `${import.meta.env.BASE_URL}examples/inspection-plate.dxf`,
 });
 const active = () => workspaceDocument.active;
 const dims = () => workspaceDocument.dimensions;
@@ -187,11 +202,11 @@ const toleranceEditor = new ToleranceEditorController({
   },
   reportError: toast,
 });
-const partTypeEditor = new PartTypeEditorController({
-  active,
-  busy: () => busy,
-  commit: (partId, data) => workspaceDocument.setManufacturing(partId, data),
+const manufacturingEditors = new ManufacturingEditorController({
+  document: workspaceDocument,
+  busy: () => files.busy,
   render,
+  refresh: refreshInspector,
   report: toast,
 });
 
@@ -325,7 +340,7 @@ const drawingCanvas = new DrawingCanvas({
 });
 const textNoteEditor = new TextAnnotationEditorController({
   commit(session, annotation) {
-    if (state.activeId !== session.partId || busy || viewerMode)
+    if (state.activeId !== session.partId || files.busy || viewerMode)
       throw new Error('The drawing changed. Close this editor and select the note again.');
     const current = session.annotation
       ? annotations().find((item) => item.id === session.annotation!.id)
@@ -358,13 +373,13 @@ const textNoteEditor = new TextAnnotationEditorController({
     render();
   },
   closed() {
-    drawingCanvas.setEnabled(!busy && !helpOpen && !textNoteEditor.isOpen);
+    drawingCanvas.setEnabled(!files.busy && !helpOpen && !textNoteEditor.isOpen);
     app.querySelector<HTMLElement>('#canvas-area')?.focus({ preventScroll: true });
   },
 });
 
 function openTextNote(id?: string, point?: Point2, client?: Point2): void {
-  if (!state.activeId || busy || viewerMode || textNoteEditor.isOpen) return;
+  if (!state.activeId || files.busy || viewerMode || textNoteEditor.isOpen) return;
   const annotation = id ? annotations().find((item) => item.id === id) : undefined;
   if (id && (!annotation || annotation.kind !== 'text')) return;
   if (annotation?.locked) {
@@ -412,12 +427,12 @@ const imageShare = new DrawingShareController({
 const captureRegion = new CaptureRegionController(
   (bounds) => {
     app.querySelector('.capture-cancel')?.remove();
-    drawingCanvas.setEnabled(!busy && !helpOpen && !textNoteEditor.isOpen);
+    drawingCanvas.setEnabled(!files.busy && !helpOpen && !textNoteEditor.isOpen);
     imageShare.open(screenAppearance(), bounds);
   },
   () => {
     app.querySelector('.capture-cancel')?.remove();
-    drawingCanvas.setEnabled(!busy && !helpOpen);
+    drawingCanvas.setEnabled(!files.busy && !helpOpen);
     renderPaper();
   },
 );
@@ -431,8 +446,8 @@ const contextMenu = new ContextMenuController({
 });
 function commandContext(): CommandContext {
   return {
-    busy,
-    importing: busy && busyOperation !== 'export',
+    busy: files.busy,
+    importing: files.busy && files.kind !== 'pdf' && files.kind !== 'save',
     partCount: state.parts.length,
     hasActivePart: Boolean(active()),
     selectedPartCount: state.selected.size,
@@ -455,7 +470,7 @@ function commandContext(): CommandContext {
   };
 }
 function startCapture(): void {
-  if (!active() || busy) return;
+  if (!active() || files.busy) return;
   drawingCanvas.cancel();
   drawingCanvas.setEnabled(false);
   captureRegion.startCapture();
@@ -496,7 +511,7 @@ function updateSelectionActions(): void {
   const lockCommand = getCommand('toggle-selection-lock', commandContext());
   const countLabel = `${count} selected${lockedCount ? ` · ${lockedCount} locked` : ''}`;
   const editLabel = count === 1 ? 'Edit' : 'Properties';
-  bar.hidden = !count || busy;
+  bar.hidden = !count || files.busy;
   bar.innerHTML = count
     ? `<span class="selection-actions-count" title="${e(t(countLabel))}">${e(t(countLabel))}</span>${button('edit-dimension', editLabel, 'dimension', 'selection-action', `aria-label="${e(t(editLabel))}" title="${e(t(editLabel))}"`)}${button('fit-selection', 'Focus', 'fit', 'selection-action', 'title="Fit selected dimensions · F"')}${button('toggle-selection-lock', lockCommand?.label ?? 'Lock selection', lockCommand?.icon ?? 'lock', 'selection-action', `aria-label="${e(lockCommand?.label ?? t('Lock selection'))}" title="${e(lockCommand?.label ?? t('Lock selection'))}"`)}${button('delete-selected-dimensions', 'Delete', 'trash', 'selection-action destructive', `aria-label="${e(t('Delete'))}" title="${e(t(lockedCount ? 'Unlock the selection before editing or deleting it.' : 'Delete'))}"${lockedCount ? ' disabled' : ''}`)}${button('clear-dimension-selection', '', 'close', 'selection-action', 'aria-label="Clear dimension selection" title="Clear dimension selection"')}`
     : '';
@@ -512,6 +527,7 @@ function zoomOptions(): string {
     .join('');
 }
 function refreshInspector(): void {
+  viewState.capture(app);
   normalizeActiveViews();
   toleranceEditor.capture(app);
   const views = createWorkspaceViews({
@@ -523,24 +539,30 @@ function refreshInspector(): void {
     dimensionFilter,
     autoDetail,
     collapsedBranches,
-    annotationPanel: renderMarkupPanel(),
-    instructionsPanel: renderInstructionsPanel(),
-    manufacturingPanel: renderPartTypePanel(),
+    annotationPanel: renderMarkupPanel,
+    instructionsPanel: () => manufacturingEditors.renderInstructions(),
+    manufacturingPanel: () => manufacturingEditors.renderParameters(),
     hasLockedItems: hasLockedItems(),
   });
   const body = app.querySelector('.inspector-body');
-  if (body) body.innerHTML = views.renderInspector();
+  if (body) {
+    body.innerHTML = views.renderInspector();
+    body.setAttribute('data-panel-view-key', JSON.stringify([state.activeId, inspectorTab]));
+    body.setAttribute('aria-labelledby', `inspector-tab-${inspectorTab}`);
+  }
   toleranceEditor.restore(app);
   updateCacheStatus();
   updateDrawingFeedback();
   updateSelectionActions();
   localizeUi(app);
+  viewState.restore(app);
   measureCanvasControls();
   drawingCanvas.refreshViewport();
   for (const tab of app.querySelectorAll<HTMLElement>('.inspector-tabs [role="tab"]')) {
     const selected = tab.dataset.action === `tab:${inspectorTab}`;
     tab.classList.toggle('active', selected);
     tab.setAttribute('aria-selected', String(selected));
+    tab.tabIndex = selected ? 0 : -1;
   }
 }
 
@@ -569,75 +591,12 @@ function renderViewerControls(): string {
 }
 function renderMarkupPanel(): string {
   const selected = annotations().find((item) => item.id === selectedAnnotation);
-  return `${renderMarkupGuide({ tool, enabled: !busy && Boolean(active()), selected: Boolean(selected), selectedKind: selected?.kind })}${renderAnnotationEditor(selected, annotationOptions, tool)}<div class="annotation-list"><div class="section-label">ANNOTATIONS · ${annotations().length}</div>${annotations()
+  return `${renderMarkupGuide({ tool, enabled: !files.busy && Boolean(active()), selected: Boolean(selected), selectedKind: selected?.kind })}${renderAnnotationEditor(selected, annotationOptions, tool)}<div class="annotation-list"><div class="section-label">ANNOTATIONS · ${annotations().length}</div>${annotations()
     .map(
       (item, index) =>
         `<button type="button" class="annotation-list-item ${item.id === selectedAnnotation ? 'active' : ''}" data-annotation-select="${e(item.id)}"><span>${e(item.kind)}</span><span data-user-content>${e(item.text?.split('\n')[0].slice(0, 45) || String(index + 1))}</span>${renderLockBadge(item.locked)}</button>`,
     )
     .join('')}</div>`;
-}
-function renderInstructionsPanel(): string {
-  const committed = instructions();
-  const draft = state.activeId ? (instructionDrafts.get(state.activeId) ?? committed) : '';
-  return renderManufacturingInstructions(draft, !busy && Boolean(active()), {
-    dirty: draft !== committed,
-    locked: Boolean(state.activeId && partHasLocks(state.activeId)),
-  });
-}
-function renderPartTypePanel(): string {
-  const part = active();
-  return part
-    ? renderPartTypeEditor(
-        part,
-        partTypeEditor.draft(part),
-        !busy,
-        effectivePartType(part) === 'gear'
-          ? renderGearEditor(part, gearDrafts.get(part.id), !busy)
-          : '',
-      )
-    : '<p class="field-help">Import a part to choose its type and manufacturing parameters.</p>';
-}
-function flushManufacturingDrafts(): void {
-  const pending = partTypeEditor.preparePending(state.parts);
-  flushGearDrafts();
-  if (partTypeEditor.commitPending(pending)) render();
-}
-function flushGearDrafts(): void {
-  const pending = [...gearDrafts]
-    .filter(([id]) =>
-      state.parts.some((part) => part.id === id && effectivePartType(part) === 'gear'),
-    )
-    .map(([id, draft]) => [id, parseGearEditorDraft(draft)] as const);
-  flushInstructionDrafts();
-  let changed = false;
-  for (const [id, specification] of pending) {
-    changed = workspaceDocument.setGearSpecification(id, specification) || changed;
-    gearDrafts.delete(id);
-  }
-  if (changed) render();
-}
-function applyGearDraft(): void {
-  if (!state.activeId || busy) return;
-  try {
-    const specification = parseGearEditorDraft(captureGearEditor(app));
-    workspaceDocument.setGearSpecification(state.activeId, specification);
-    gearDrafts.delete(state.activeId);
-    render();
-    toast('Gear data applied to this part.');
-  } catch (error) {
-    toast(errorMessage(error));
-  }
-}
-function flushInstructionDrafts(): void {
-  const pending = [...instructionDrafts]
-    .filter(([id]) => state.parts.some((part) => part.id === id))
-    .map(([id, text]) => [id, parsePartInstructions(text)] as const);
-  let changed = false;
-  for (const [id, text] of pending) {
-    changed = workspaceDocument.setInstructions(id, text) || changed;
-    instructionDrafts.delete(id);
-  }
-  if (changed) render();
 }
 function syncAnnotationSwatches(color: string): void {
   for (const swatch of app.querySelectorAll<HTMLElement>('[data-annotation-color]'))
@@ -668,7 +627,7 @@ function updateViewerStatus(): void {
   button?.setAttribute('aria-pressed', String(screenAwake.enabled));
 }
 function enterViewer(): void {
-  if (!active() || busy) return;
+  if (!active() || files.busy) return;
   viewerMode = true;
   clearTimeout(toastTimer);
   notification = '';
@@ -747,6 +706,7 @@ function openExportOptions(): void {
 }
 
 function render(): void {
+  viewState.capture(app);
   normalizeActiveViews();
   if (selectedAnnotation && !annotations().some((item) => item.id === selectedAnnotation))
     selectedAnnotation = undefined;
@@ -766,9 +726,9 @@ function render(): void {
     dimensionFilter,
     autoDetail,
     collapsedBranches,
-    annotationPanel: renderMarkupPanel(),
-    instructionsPanel: renderInstructionsPanel(),
-    manufacturingPanel: renderPartTypePanel(),
+    annotationPanel: renderMarkupPanel,
+    instructionsPanel: () => manufacturingEditors.renderInstructions(),
+    manufacturingPanel: () => manufacturingEditors.renderParameters(),
     hasLockedItems: hasLockedItems(),
   });
   app.innerHTML = `
@@ -777,33 +737,33 @@ function render(): void {
       <div class="header-right"><span class="local-pill">${icon('lock')}<span>Files stay on your device</span></span>${renderProjectLink()}${renderLanguageControl()}${button('command-palette', 'Commands <kbd>⌘ / Ctrl K</kbd>', 'search', 'command-search-trigger', 'aria-label="Search commands"')}${button('toggle-focus-mode', `<span class="focus-toggle-label">${focusMode ? 'Show panels' : 'Focus mode'}</span>`, focusMode ? 'panels' : 'expand', `quiet focus-mode-toggle${focusMode ? ' active' : ''}`, `aria-label="${focusMode ? 'Show panels' : 'Focus mode'}" title="Focus drawing · Shift+F" aria-pressed="${focusMode}"`)}${button('help', 'Quick guide', 'info', 'quiet help-button')}${button('theme', '', theme === 'light' ? 'moon' : 'sun', 'icon-button', `aria-label="Switch to ${theme === 'light' ? 'dark' : 'light'} theme" title="Switch theme"`)}</div>
     </header>
     <div class="workspace${focusMode ? ' focus-mode' : ''}">
-      <aside class="files-panel" aria-label="Model files">
+      <aside class="files-panel" aria-label="Model files" data-panel-view-key="files">
         <div class="panel-title"><span>WORKSPACE</span><span class="count">${state.parts.length}</span></div>
-        ${button('import', 'Import files', 'plus', 'import-button', busy ? 'disabled' : '')}
+        ${button('import', 'Import files', 'plus', 'import-button', files.busy ? 'disabled' : '')}
         <input id="file-input" type="file" accept=".step,.stp,.dxf" multiple hidden />
         <input id="project-input" type="file" accept=".zip,.json,.techdraw" hidden />
         <details class="import-settings"><summary>Import settings</summary><label>DXF units<select id="dxf-unit">${option('file', 'From file · mm if unset', dxfUnit ?? 'file')}${(['mm', 'cm', 'm', 'in', 'ft'] as const).map((unit) => option(unit, unit, dxfUnit ?? 'file')).join('')}</select></label></details>
         <div class="file-tools">${button('open-project', 'Open project', 'file', 'text-button')}${button('save-project', 'Save', 'download', 'text-button', !part ? 'disabled' : '')}</div>
         <div class="files-section-heading"><span>PARTS</span>${state.parts.length ? button('select-all', state.selected.size === state.parts.length ? 'Clear' : 'Select all', undefined, 'text-button small') : ''}</div>
-        <div class="part-list">${views.renderParts()}</div>
+        <div class="part-list" data-panel-view-key="parts">${views.renderParts()}</div>
         <details class="project-notes"><summary>Project description</summary><textarea id="project-description" data-user-content maxlength="10000" aria-label="Project description" placeholder="Notes for the engineer or customer">${e(state.description)}</textarea><p>Saved in the project archive with source files and editable drawing data.</p></details>
         <div class="sidebar-bottom"><div class="private-note">${icon('cube')}<div><strong>Real geometry. Local processing.</strong><p>STEP → CAD kernel → vector drawing.<br>No upload. No account.</p></div></div><a href="https://github.com/defencore/TechDraw" target="_blank" rel="noopener noreferrer">Source & documentation ${icon('arrow')}</a></div>
       </aside>
       <main class="drawing-workspace">
         ${focusMode ? `<div class="focus-mode-banner" role="status"><span>Focus mode is on</span>${button('toggle-focus-mode', 'Show panels', 'panels', 'text-button')}</div>` : ''}
-        <div class="workspace-heading"><div><div class="eyebrow">DRAWING WORKSPACE</div><h1 ${part ? `data-user-content title="${e(part.name)}"` : ''}>${part ? e(partDisplayLabel(part.name)) : 'From solid to sheet'}</h1></div><div class="export-group">${button('view-drawing', 'View', 'expand', 'secondary compact', !part || busy ? 'disabled' : '')}${button('share-drawing', 'Copy image', 'copy', 'secondary compact', !part || busy ? 'disabled' : '')}${button('export-options', `Export${state.selected.size > 1 ? ` · ${state.selected.size}` : ''}`, 'download', 'primary', !state.selected.size || busy ? 'disabled' : '')}</div></div>
+        <div class="workspace-heading"><div><div class="eyebrow">DRAWING WORKSPACE</div><h1 ${part ? `data-user-content title="${e(part.name)}"` : ''}>${part ? e(partDisplayLabel(part.name)) : 'From solid to sheet'}</h1></div><div class="export-group">${button('view-drawing', 'View', 'expand', 'secondary compact', !part || files.busy ? 'disabled' : '')}${button('share-drawing', 'Copy image', 'copy', 'secondary compact', !part || files.busy ? 'disabled' : '')}${button('export-options', `Export${state.selected.size > 1 ? ` · ${state.selected.size}` : ''}`, 'download', 'primary', !state.selected.size || files.busy ? 'disabled' : '')}</div></div>
         <div id="workspace-feedback" role="status" aria-live="polite" hidden></div>
-        <div class="canvas-shell"><div id="selection-actions" class="selection-actions" role="toolbar" aria-label="Selected dimension actions" hidden></div>${renderWorkspaceControls({ tool, mode: workspaceMode, enabled: Boolean(part) && !busy, canUndo: Boolean(workspaceDocument.history?.canUndo), canRedo: Boolean(workspaceDocument.history?.canRedo), zoomOptions: zoomOptions(), grid, customGrid })}
+        <div class="canvas-shell"><div id="selection-actions" class="selection-actions" role="toolbar" aria-label="Selected dimension actions" hidden></div>${renderWorkspaceControls({ tool, mode: workspaceMode, enabled: Boolean(part) && !files.busy, canUndo: Boolean(workspaceDocument.history?.canUndo), canRedo: Boolean(workspaceDocument.history?.canRedo), zoomOptions: zoomOptions(), grid, customGrid })}
         <div class="canvas-area ${dimensionTools.some((item) => item.id === tool) ? 'measuring' : ''}" id="canvas-area" tabindex="0" aria-label="Drawing canvas. Wheel to zoom, drag empty space to pan."><div class="drop-overlay">${icon('upload')}Drop STEP files to import</div><div id="paper-host"></div>${!part ? views.renderEmpty() : ''}</div>
         </div><div class="canvas-status"><span id="tool-hint">${e(canvasHint)}</span><span>${part ? `${state.settings.format} · ${state.settings.orientation} · mm` : 'STEP / STP / DXF · Multiple files supported'}</span></div>
       </main>
       <aside class="inspector" aria-label="Drawing properties">
-        <div class="inspector-tabs" role="tablist">${['dimensions', 'annotations', 'instructions', 'manufacturing', 'sheet', 'details'].map((tab) => `<button role="tab" aria-selected="${inspectorTab === tab}" data-action="tab:${tab}" class="${inspectorTab === tab ? 'active' : ''}">${tab === 'details' ? 'Title block' : tab === 'annotations' ? 'Markup' : tab === 'manufacturing' ? 'Part type' : tab[0].toUpperCase() + tab.slice(1)}</button>`).join('')}</div>
-        <div class="inspector-body">${views.renderInspector()}</div>
+        <div class="inspector-tabs" role="tablist">${renderInspectorTabs(inspectorTab)}</div>
+        <div class="inspector-body" id="inspector-panel" role="tabpanel" aria-labelledby="inspector-tab-${inspectorTab}" data-panel-view-key="${e(JSON.stringify([state.activeId, inspectorTab]))}">${views.renderInspector()}</div>
         <div class="review-note">${icon('info')}<p><strong>Review before manufacture</strong>Automatic dimensions are a starting point. Confirm features, tolerances, fits and sections.</p></div>
       </aside>
     </div>
-    <div id="busy-overlay" class="busy-overlay ${busy ? 'visible' : ''}" role="status" aria-live="polite"><div class="busy-card"><span class="spinner"></span><strong>${busyOperation === 'export' ? 'Exporting your PDF' : 'Preparing your drawing'}</strong><p id="progress-message">${e(progress)}</p>${busyOperation !== 'export' ? button('cancel', 'Cancel', undefined, 'secondary') : ''}</div></div>
+    <div id="busy-overlay" class="busy-overlay ${files.busy ? 'visible' : ''}" role="status" aria-live="polite"><div class="busy-card"><span class="spinner"></span><strong>${files.kind === 'pdf' ? 'Exporting your PDF' : files.kind === 'save' ? 'Saving project archive…' : 'Preparing your drawing'}</strong><p id="progress-message">${e(files.message)}</p>${files.kind !== 'pdf' && files.kind !== 'save' ? button('cancel', 'Cancel', undefined, 'secondary') : ''}</div></div>
     <div id="toast" class="toast ${notification ? 'visible' : ''}" role="status" aria-live="polite">${e(notification)}</div>
     ${helpOpen ? views.renderHelp() : ''}${viewerMode ? renderViewerControls() : ''}`;
   if (retainedCanvas) app.querySelector('#canvas-area')!.replaceWith(retainedCanvas);
@@ -813,7 +773,7 @@ function render(): void {
   else if (!empty) canvas.insertAdjacentHTML('beforeend', views.renderEmpty());
   drawingCanvas.attach(canvas);
   captureRegion.attach(canvas);
-  drawingCanvas.setEnabled(!busy && !helpOpen && !textNoteEditor.isOpen);
+  drawingCanvas.setEnabled(!files.busy && !helpOpen && !textNoteEditor.isOpen);
   drawingCanvas.setReadOnly(viewerMode);
   drawingCanvas.setAnnotationOptions(annotationOptions);
   drawingCanvas.setTool(tool);
@@ -831,6 +791,14 @@ function render(): void {
   updateCacheStatus();
   updateSelectionActions();
   localizeUi(app);
+  viewState.restore(app);
+  if (state.activeId !== lastShownPartId && !viewerMode) {
+    lastShownPartId = state.activeId;
+    if (matchMedia('(min-width: 961px)').matches)
+      [...app.querySelectorAll<HTMLElement>('[data-part-id]')]
+        .find((element) => element.dataset.partId === state.activeId)
+        ?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
 }
 
 function measureCanvasControls(): void {
@@ -938,10 +906,10 @@ function updateDrawingFeedback(): void {
 
 function updateProgress(): void {
   const el = document.querySelector('#progress-message');
-  if (el) el.textContent = t(progress);
+  if (el) el.textContent = t(files.message);
 }
 function setTool(value: CanvasTool): void {
-  if (busy || (value !== 'select' && value !== 'pan' && !active())) return;
+  if (files.busy || (value !== 'select' && value !== 'pan' && !active())) return;
   drawingCanvas.cancel();
   tool = value;
   drawingCanvas.setTool(value);
@@ -1076,15 +1044,8 @@ app.addEventListener('focusout', (event) => {
   if (control.dataset.dimensionSetting) dimensionInputSession = undefined;
 });
 app.addEventListener('submit', (event) => {
-  if ((event.target as HTMLElement).id === 'manufacturing-profile-form') {
+  if (manufacturingEditors.handleSubmit(app, (event.target as HTMLElement).id))
     event.preventDefault();
-    partTypeEditor.apply(app);
-    return;
-  }
-  if ((event.target as HTMLElement).id === 'gear-editor-form') {
-    event.preventDefault();
-    applyGearDraft();
-  }
 });
 app.addEventListener('input', (event) => {
   const control = event.target as HTMLInputElement | HTMLTextAreaElement;
@@ -1113,241 +1074,6 @@ app.addEventListener('input', (event) => {
   clearTimeout(paperUpdateTimer);
   paperUpdateTimer = setTimeout(renderPaper, 120);
 });
-
-async function importFiles(files: File[]): Promise<void> {
-  if (busy || viewerMode) return;
-  const valid = files.filter((f) => /\.(step|stp|dxf)$/i.test(f.name));
-  if (!valid.length) {
-    toast('Choose a STEP (.step, .stp) or DXF (.dxf) file.');
-    return;
-  }
-  busy = true;
-  busyOperation = 'import';
-  progress = 'Loading the browser CAD kernel…';
-  const token = ++importToken;
-  render();
-  let added = 0;
-  let firstAddedId: string | undefined;
-  const errors: string[] = [];
-  try {
-    for (const file of valid) {
-      if (token !== importToken) break;
-      if (file.size > 64 * 1024 * 1024) {
-        errors.push(`${file.name}: exceeds the 64 MB browser import limit.`);
-        continue;
-      }
-      try {
-        progress = `Reading ${file.name}…`;
-        updateProgress();
-        const bytes = await file.arrayBuffer();
-        const original = new Uint8Array(bytes).slice();
-        const kind = /\.dxf$/i.test(file.name) ? 'dxf' : 'step';
-        const result =
-          kind === 'dxf'
-            ? importDxf(bytes, file.name, { unit: dxfUnit })
-            : await cad.importStep(bytes, file.name);
-        if (token !== importToken) break;
-        const source = sources.add({ name: file.name, kind, bytes: original });
-        for (const part of result.parts) {
-          part.id = crypto.randomUUID();
-          part.sourceId = source.id;
-          workspaceDocument.addPart(part);
-          firstAddedId ??= part.id;
-          added++;
-        }
-        if (result.warnings.length) errors.push(...result.warnings);
-      } catch (err) {
-        if (token === importToken) errors.push(`${file.name}: ${errorMessage(err)}`);
-      }
-    }
-  } finally {
-    if (token === importToken) {
-      busy = false;
-      if (firstAddedId) {
-        state.activeId = firstAddedId;
-        dimensionSelection.clear();
-        tool = 'select';
-      }
-      render();
-      if (errors.length)
-        toast([...new Set(errors.map((message) => t(message)))].join(' ').slice(0, 700));
-      else if (added)
-        toast(
-          `${added} ${added === 1 ? 'part' : 'parts'} imported. Review the dimensions before export.`,
-        );
-    }
-  }
-}
-
-async function loadDemo(): Promise<void> {
-  if (busy) return;
-  busy = true;
-  busyOperation = 'import';
-  progress = 'Building the example with the CAD kernel…';
-  const token = ++importToken;
-  render();
-  try {
-    const result = await cad.demo();
-    if (token !== importToken) return;
-    const source = sources.add({
-      name: result.sourceName,
-      kind: 'step',
-      bytes: result.sourceBytes,
-    });
-    for (const part of result.parts) {
-      part.id = crypto.randomUUID();
-      part.sourceId = source.id;
-      workspaceDocument.addPart(part);
-      state.activeId = part.id;
-    }
-    toast('Example ready. Try moving a dimension or changing the sheet format.');
-  } catch (err) {
-    if (token === importToken) toast(errorMessage(err));
-  } finally {
-    if (token === importToken) {
-      busy = false;
-      render();
-    }
-  }
-}
-async function loadDxfDemo(): Promise<void> {
-  if (busy) return;
-  try {
-    const response = await fetch(`${import.meta.env.BASE_URL}examples/inspection-plate.dxf`);
-    if (!response.ok) throw new Error('The example DXF file could not be loaded.');
-    await importFiles([
-      new File([await response.arrayBuffer()], 'inspection-plate.dxf', { type: 'application/dxf' }),
-    ]);
-  } catch (error) {
-    toast(errorMessage(error));
-  }
-}
-async function prepareAllDrawings(): Promise<void> {
-  if (busy || viewerMode || !state.parts.length) return;
-  const token = ++importToken;
-  busy = true;
-  busyOperation = 'prepare';
-  progress = 'Preparing drawings for all parts…';
-  state.selected = new Set(state.parts.map((part) => part.id));
-  render();
-  try {
-    for (const [index, part] of state.parts.entries()) {
-      if (token !== importToken) return;
-      progress = `Preparing drawing ${index + 1} of ${state.parts.length}…`;
-      updateProgress();
-      workspaceDocument.layout(part);
-      if (index % 4 === 0)
-        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-    }
-    if (token === importToken)
-      toast(
-        'Drawings are ready for all parts. Export the selected pages or save one compact project ZIP.',
-      );
-  } catch (error) {
-    if (token === importToken) toast(errorMessage(error));
-  } finally {
-    if (token === importToken) {
-      busy = false;
-      render();
-    }
-  }
-}
-async function exportDrawing(): Promise<void> {
-  const parts = state.parts.filter((p) => state.selected.has(p.id));
-  if (!parts.length || busy) return;
-  busy = true;
-  busyOperation = 'export';
-  progress = `Creating ${parts.length} vector PDF ${parts.length === 1 ? 'page' : 'pages'}…`;
-  render();
-  try {
-    const { exportPdf } = await import('./drawing/pdf');
-    await exportPdf(
-      parts.map((part) => {
-        const layout = workspaceDocument.layout(part);
-        return {
-          part,
-          dimensions: state.dimensions[part.id] ?? [],
-          settings: state.settings,
-          layout,
-          annotations: state.annotations[part.id] ?? [],
-          instructions: instructions(part.id),
-          appearance: exportAppearance,
-        };
-      }),
-      parts.length === 1 ? `${safeName(parts[0].name)}.pdf` : 'techdraw-drawing-set.pdf',
-    );
-    toast('PDF exported. Print at actual size to preserve scale.');
-  } catch (err) {
-    toast(`PDF export failed: ${errorMessage(err)}`);
-  } finally {
-    busy = false;
-    render();
-  }
-}
-const safeName = (name: string) => name.replace(/[^a-z0-9_.-]+/gi, '-').slice(0, 100) || 'drawing';
-
-async function saveProject(): Promise<void> {
-  try {
-    for (const part of state.parts) workspaceDocument.layout(part);
-    const bytes = await createProjectArchive(state, sources.all(), {
-      description: state.description,
-    });
-    downloadBlob(
-      new Blob([new Uint8Array(bytes)], { type: 'application/zip' }),
-      'workspace.techdraw.zip',
-    );
-    toast('Project archive saved with source files, dimensions and annotations.');
-  } catch (error) {
-    toast(`Cannot save project: ${errorMessage(error)}`);
-  }
-}
-
-async function openProject(file: File): Promise<void> {
-  if (busy || viewerMode) return;
-  if (file.size > (/\.zip$/i.test(file.name) ? 128 : 100) * 1024 * 1024) {
-    toast('Project exceeds the supported file size limit.');
-    return;
-  }
-  const token = ++importToken;
-  busy = true;
-  busyOperation = 'import';
-  progress = 'Opening project…';
-  render();
-  try {
-    const archive = /\.zip$/i.test(file.name)
-      ? await openProjectArchive(new Uint8Array(await file.arrayBuffer()))
-      : undefined;
-    const data = archive?.project ?? parseProject(await file.text());
-    if (token !== importToken) return;
-    instructionDrafts.clear();
-    gearDrafts.clear();
-    partTypeEditor.clear();
-    toleranceEditor.reset();
-    const savedOrientation = data.settings.orientation;
-    workspaceDocument.replace(data);
-    sources.replace(archive?.sources ?? []);
-    normalizeSheetOrientation();
-    if (savedOrientation !== state.settings.orientation) state.layouts = {};
-    cacheTitleBlock();
-    drawingCanvas.cancel();
-    dimensionSelection.clear();
-    selectedAnnotation = undefined;
-    tool = 'select';
-    busy = false;
-    render();
-    toast(
-      archive?.missingSources.length
-        ? 'Project opened. Some original source files were unavailable when it was saved.'
-        : 'Editable project opened.',
-    );
-  } catch (err) {
-    if (token === importToken) {
-      busy = false;
-      render();
-      toast(`Cannot open project: ${errorMessage(err)}`);
-    }
-  }
-}
 
 function addDimension(d: Dimension): void {
   tool = 'select';
@@ -1383,7 +1109,7 @@ function updateGridDensity(): void {
 
 function placeSelectedDimensions(side: PlacementSide): void {
   const part = active();
-  if (!part || !dimensionSelection.ids.size || busy) return;
+  if (!part || !dimensionSelection.ids.size || files.busy) return;
   if (lockedSelectionCount()) {
     toast('Unlock the selection before editing or deleting it.');
     return;
@@ -1478,7 +1204,8 @@ function deleteDimensions(ids: ReadonlySet<string>): void {
 function travelHistory(direction: 'undo' | 'redo'): void {
   drawingCanvas.cancel();
   if (workspaceDocument.travel(direction)) {
-    if (state.activeId) gearDrafts.delete(state.activeId);
+    manufacturingEditors.reconcileHistory();
+    if (state.activeId) toleranceEditor.reconcilePart(state.activeId, dims());
     dimensionSelection.retain(dims().map((dimension) => dimension.id));
     if (!annotations().some((item) => item.id === selectedAnnotation))
       selectedAnnotation = undefined;
@@ -1505,7 +1232,7 @@ const commandHandlers: Record<CommandId, () => void> = {
   import: () => app.querySelector<HTMLInputElement>('#file-input')!.click(),
   'open-project': () => app.querySelector<HTMLInputElement>('#project-input')!.click(),
   'save-project': () => {
-    void saveProject();
+    void files.save();
   },
   'view-drawing': enterViewer,
   'toggle-native-fullscreen': toggleNativeFullscreen,
@@ -1527,16 +1254,16 @@ const commandHandlers: Record<CommandId, () => void> = {
   'capture-region': startCapture,
   'export-options': openExportOptions,
   demo: () => {
-    void loadDemo();
+    void files.loadDemo();
   },
   'demo-dxf': () => {
-    void loadDxfDemo();
+    void files.loadDxfDemo();
   },
   'prepare-all-drawings': () => {
-    void prepareAllDrawings();
+    void files.prepareAll();
   },
   'export-pdf': () => {
-    void exportDrawing();
+    void files.exportPdf();
   },
   'export-svg': () =>
     downloadBlob(
@@ -1557,7 +1284,7 @@ const commandHandlers: Record<CommandId, () => void> = {
         ],
         { type: 'image/svg+xml' },
       ),
-      `${safeName(active()!.name)}.svg`,
+      drawingFileName(active()!.name, 'svg'),
     ),
   'select-all': () => {
     state.selected =
@@ -1684,16 +1411,7 @@ const commandHandlers: Record<CommandId, () => void> = {
         : 'Title block cleared. Browser storage is unavailable.',
     );
   },
-  cancel: () => {
-    const preparing = busyOperation === 'prepare';
-    importToken++;
-    cad.reset();
-    state.activeId ??= state.parts[0]?.id ?? null;
-    tool = 'select';
-    busy = false;
-    render();
-    toast(preparing ? 'Drawing preparation cancelled.' : 'Import cancelled.');
-  },
+  cancel: () => files.cancel(),
 };
 function runWorkspaceAction(action: string): void {
   if (textNoteEditor.isOpen) return;
@@ -1742,7 +1460,7 @@ function runWorkspaceAction(action: string): void {
     ].includes(command.id)
   ) {
     try {
-      flushManufacturingDrafts();
+      manufacturingEditors.flush();
     } catch (error) {
       toast(errorMessage(error));
       return;
@@ -1753,50 +1471,11 @@ function runWorkspaceAction(action: string): void {
 
 app.addEventListener('click', (event) => {
   const target = event.target as Element;
-  if (partTypeEditor.handleClick(app, target)) {
+  if (manufacturingEditors.handleClick(app, target)) {
     event.preventDefault();
-    return;
-  }
-  if (handleGearEditorClick(app, target)) return;
-  const gearAction = target.closest<HTMLElement>('[data-gear-action]')?.dataset.gearAction;
-  if (gearAction) {
-    event.preventDefault();
-    if (gearAction === 'apply') applyGearDraft();
-    else if (state.activeId) {
-      gearDrafts.delete(state.activeId);
-      if (gearAction === 'remove') {
-        workspaceDocument.setGearSpecification(state.activeId);
-        render();
-        toast('Gear data removed. Measured geometry remains available.');
-      } else refreshInspector();
-    }
     return;
   }
   syncSettingsFromControls();
-  const instructionAction = target.closest<HTMLElement>('[data-instructions-action]')?.dataset
-    .instructionsAction;
-  if (instructionAction && state.activeId) {
-    if (instructionAction === 'reset') {
-      instructionDrafts.delete(state.activeId);
-      refreshInspector();
-      return;
-    }
-    if (instructionAction === 'apply') {
-      try {
-        const text =
-          app.querySelector<HTMLTextAreaElement>('#manufacturing-instructions')?.value ??
-          instructionDrafts.get(state.activeId) ??
-          instructions();
-        workspaceDocument.setInstructions(state.activeId, text);
-        instructionDrafts.delete(state.activeId);
-        render();
-        toast('Manufacturing instructions saved on this part drawing.');
-      } catch (error) {
-        toast(errorMessage(error));
-      }
-      return;
-    }
-  }
   if (target.closest('#viewer-awake')) {
     screenAwake.retry();
     return;
@@ -1882,11 +1561,9 @@ app.addEventListener('click', (event) => {
       return;
     }
     toleranceEditor.clearPart(removeId);
-    instructionDrafts.delete(removeId);
-    gearDrafts.delete(removeId);
-    partTypeEditor.clearPart(removeId);
+    manufacturingEditors.clearPart(removeId);
     drawingCanvas.cancel();
-    workspaceDocument.removePart(removeId);
+    files.removePart(removeId);
     dimensionSelection.clear();
     selectedAnnotation = undefined;
     tool = 'select';
@@ -1917,15 +1594,7 @@ app.addEventListener('click', (event) => {
 
 app.addEventListener('change', (event) => {
   const target = event.target as HTMLInputElement;
-  if (target.matches('[data-manufacturing-type]')) {
-    partTypeEditor.handleTypeChange(app, target.value);
-    return;
-  }
-  if (target.dataset.gearField && state.activeId) {
-    gearDrafts.set(state.activeId, captureGearEditor(app));
-    if (target.dataset.gearField === 'type') syncGearEditorType(app);
-    return;
-  }
+  if (manufacturingEditors.handleChange(app, target)) return;
   if (target.id === 'dxf-unit') {
     dxfUnit = target.value === 'file' ? undefined : (target.value as DxfUnit);
     return;
@@ -2011,13 +1680,13 @@ app.addEventListener('change', (event) => {
     return;
   }
   if (target.id === 'file-input') {
-    void importFiles(Array.from(target.files ?? []));
+    void files.importFiles(Array.from(target.files ?? []));
     target.value = '';
     return;
   }
   if (target.id === 'project-input') {
     const file = target.files?.[0];
-    if (file) void openProject(file);
+    if (file) void files.open(file);
     target.value = '';
     return;
   }
@@ -2093,11 +1762,24 @@ window.addEventListener('drop', (event) => {
   dragDepth = 0;
   document.querySelector('#canvas-area')?.classList.remove('dragover');
   if (event.dataTransfer && !viewerMode && !textNoteEditor.isOpen)
-    void importFiles([...event.dataTransfer.files]);
+    void files.importFiles([...event.dataTransfer.files]);
 });
 window.addEventListener('keydown', (event) => {
   if (event.defaultPrevented || commandPalette.isOpen) return;
   if (document.querySelector('dialog[open]')) return;
+  const tab = (event.target as Element)?.closest<HTMLElement>('.inspector-tabs [role="tab"]');
+  if (tab && !event.altKey && !event.ctrlKey && !event.metaKey) {
+    const next = nextInspectorTab(tab.dataset.action?.slice(4) ?? '', event.key);
+    if (next) {
+      event.preventDefault();
+      const command = getCommand(`tab:${next}`, commandContext());
+      if (command?.enabled) {
+        runWorkspaceAction(command.id);
+        app.querySelector<HTMLElement>(`#inspector-tab-${next}`)?.focus({ preventScroll: true });
+      }
+      return;
+    }
+  }
   if (toleranceEditor.handleKeydown(event)) return;
   if (helpOpen && event.key === 'Tab') {
     const controls = [
@@ -2190,18 +1872,7 @@ window.addEventListener('pageshow', () => {
 });
 app.addEventListener('input', (event) => {
   const input = event.target as HTMLInputElement;
-  if (partTypeEditor.handleInput(app, input)) return;
-  if (input.dataset.gearField && state.activeId) {
-    gearDrafts.set(state.activeId, captureGearEditor(app));
-    return;
-  }
-  if (input.id === 'manufacturing-instructions' && state.activeId) {
-    instructionDrafts.set(state.activeId, input.value);
-    const dirty = input.value !== instructions();
-    for (const button of app.querySelectorAll<HTMLButtonElement>('[data-instructions-action]'))
-      button.disabled = !dirty || busy;
-    return;
-  }
+  if (manufacturingEditors.handleInput(app, input)) return;
   if (input.id === 'project-description') state.description = input.value.slice(0, 10000);
   if (input.id === 'annotation-color') syncAnnotationSwatches(input.value);
   if (input.dataset.annotationSetting && !selectedAnnotation) {
@@ -2214,7 +1885,13 @@ app.addEventListener('input', (event) => {
   }
 });
 window.addEventListener('beforeunload', (event) => {
-  if (state.parts.length) {
+  if (
+    state.parts.length &&
+    (saveState.hasChanges(state) ||
+      manufacturingEditors.hasPendingChanges() ||
+      toleranceEditor.hasPendingChanges(state.dimensions) ||
+      textNoteEditor.hasPendingChanges)
+  ) {
     event.preventDefault();
   }
 });

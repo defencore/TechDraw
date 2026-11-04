@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { DrawingAnnotation, DrawingLayout, Part, Projection } from '../src/model';
-import { parseProject, serializeProject } from '../src/project';
+import { parseProject, serializeProject, snapshotProject } from '../src/project';
 import { defaultSettings, type WorkspaceState } from '../src/state';
 import { DEFAULT_ANNOTATION_COLOR } from '../src/drawing/annotation-style';
 
@@ -64,6 +64,56 @@ function workspace(): WorkspaceState {
   };
 }
 const source = () => JSON.parse(serializeProject(workspace()));
+
+test('saving snapshots clone only validated document data without retaining mutable input arrays', () => {
+  const state = workspace();
+  const snapshot = snapshotProject(state);
+  const expected = parseProject(serializeProject(state));
+  assert.deepEqual(snapshot, expected);
+  state.parts[0].views[0].edges[0].points[0][0] = 99;
+  state.dimensions['part-1'][0].offset = 44;
+  state.settings.title = 'Edited after snapshot';
+  assert.deepEqual(snapshot, expected);
+});
+
+test('analytic edge metadata must agree with the displayed line or circular geometry', () => {
+  const straight = source();
+  straight.parts[0].views[0].edges[0].points = [
+    [0, 0],
+    [5, 2],
+    [10, 0],
+  ];
+  assert.throws(() => parseProject(JSON.stringify(straight)), /straight endpoint segment/);
+  straight.parts[0].views[0].edges[0].points = [
+    [0, 0],
+    [15, 0],
+    [10, 0],
+  ];
+  assert.throws(() => parseProject(JSON.stringify(straight)), /straight endpoint segment/);
+  const circular = source();
+  const edge = {
+    id: 'verified-circle',
+    kind: 'circle',
+    hidden: false,
+    center: [2, 2],
+    radius: 2,
+    closed: true,
+    points: [
+      [4, 2],
+      [2, 4],
+      [0, 2],
+      [2, 0],
+      [4, 2],
+    ],
+  };
+  circular.parts[0].views[0].edges = [edge];
+  assert.equal(parseProject(JSON.stringify(circular)).parts[0].views[0].edges[0].radius, 2);
+  edge.radius = 3;
+  assert.throws(() => parseProject(JSON.stringify(circular)), /analytic center and radius/);
+  edge.radius = 2;
+  edge.points.pop();
+  assert.throws(() => parseProject(JSON.stringify(circular)), /return to their starting point/);
+});
 
 function fixedLayout(): DrawingLayout {
   return {

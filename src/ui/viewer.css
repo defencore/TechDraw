@@ -70,6 +70,10 @@
     0 4px 14px #0003,
     0 12px 35px #0002;
 }
+.viewer-controls:not(:has(.viewer-fullscreen)) {
+  grid-template-columns: max-content minmax(0, 1fr) 136px 44px 188px 44px;
+  grid-template-areas: 'back part appearance wake status copy';
+}
 .viewer-controls label {
   position: relative;
   display: block;
@@ -301,6 +305,10 @@
     grid-template-areas: 'back part part copy fullscreen' 'wake appearance status status status';
     gap: 6px;
     max-width: 700px;
+  }
+  .viewer-controls:not(:has(.viewer-fullscreen)) {
+    grid-template-columns: 44px minmax(108px, 1fr) minmax(0, 1fr) 44px;
+    grid-template-areas: 'back part part copy' 'wake appearance status status';
   }
   .viewer-controls .viewer-exit {
     width: 44px;

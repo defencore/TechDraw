@@ -3,6 +3,7 @@ import { parseDimensionTolerance } from './drawing/tolerances';
 import { annotationColor } from './drawing/annotation-style';
 import { parseGearGeometry, parseGearSpecification } from './gears/specification';
 import { parseManufacturingData } from './manufacturing/catalog';
+import { MAX_PROJECT_BYTES, PROJECT_GEOMETRY_LIMITS as LIMITS } from './io/project-limits';
 import type {
   Bounds2,
   Dimension,
@@ -30,7 +31,6 @@ export interface ProjectData {
 }
 
 const VIEWS: ViewId[] = ['front', 'top', 'right', 'iso'];
-const MAX_TEXT_BYTES = 100 * 1024 * 1024;
 const MAX_COORDINATE = 1e9;
 const invalid = (message: string): never => {
   throw new Error(`Invalid project: ${message}`);
@@ -127,8 +127,10 @@ interface Budget {
 function edge(value: unknown, bounds: Bounds2, budget: Budget): ProjectedEdge {
   const e = record(value, 'edge');
   if (++budget.edges > 200000) return invalid('the project has more than 200,000 edges.');
-  const points = array(e.points, 10000, 'edge points').map((p) => point(p, 2, 'edge point'));
-  if (points.length < 2 || (budget.points += points.length) > 2000000)
+  const points = array(e.points, LIMITS.pointsPerEdge, 'edge points').map((p) =>
+    point(p, 2, 'edge point'),
+  );
+  if (points.length < 2 || (budget.points += points.length) > LIMITS.pointsPerProject)
     return invalid('edge points are empty or exceed the 2,000,000 point project limit.');
   if (points.some((p) => !within(p, bounds)))
     return invalid('edge geometry lies outside its projection bounds.');
@@ -147,15 +149,47 @@ function edge(value: unknown, bounds: Bounds2, budget: Budget): ProjectedEdge {
   }
   if (output.kind === 'circle' && (!output.center || !output.radius))
     return invalid('circular edges require an exact center and radius.');
+  const tolerance = Math.max(1e-4, ...Object.values(bounds).map((v) => Math.abs(v) * 1e-12));
+  if (output.kind === 'line') {
+    const a = points[0],
+      b = points.at(-1)!;
+    const dx = b[0] - a[0],
+      dy = b[1] - a[1],
+      length = Math.hypot(dx, dy);
+    if (
+      !length ||
+      points.some((p) => {
+        const along = ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / length;
+        const distance = Math.abs((p[0] - a[0]) * dy - (p[1] - a[1]) * dx) / length;
+        return distance > tolerance || along < -tolerance || along > length + tolerance;
+      })
+    )
+      return invalid('line samples must follow their straight endpoint segment.');
+  }
+  if (output.kind === 'circle') {
+    const center = output.center!,
+      radius = output.radius!;
+    if (
+      points.some(
+        (p) => Math.abs(Math.hypot(p[0] - center[0], p[1] - center[1]) - radius) > tolerance,
+      )
+    )
+      return invalid('circle samples do not match their analytic center and radius.');
+    if (
+      output.closed &&
+      Math.hypot(points[0][0] - points.at(-1)![0], points[0][1] - points.at(-1)![1]) > tolerance
+    )
+      return invalid('closed circle samples must return to their starting point.');
+  }
   if (e.length !== undefined) {
     output.length = numeric(e.length, 'edge length');
     if (output.length < 0) return invalid('edge length cannot be negative.');
   }
   if (e.sourcePoints !== undefined) {
-    output.sourcePoints = array(e.sourcePoints, 10000, 'source points').map((p) =>
+    output.sourcePoints = array(e.sourcePoints, LIMITS.pointsPerEdge, 'source points').map((p) =>
       point(p, 3, 'source point'),
     );
-    if ((budget.points += output.sourcePoints.length) > 2000000)
+    if ((budget.points += output.sourcePoints.length) > LIMITS.pointsPerProject)
       return invalid('source points exceed the project limit.');
   }
   return output;
@@ -164,7 +198,7 @@ function projection(value: unknown, budget: Budget): Projection {
   const v = record(value, 'projection');
   const bounds = bounds2(v.bounds),
     seenEdges = new Set<string>();
-  const edges = array(v.edges, 40000, 'projection edges').map((value) => {
+  const edges = array(v.edges, LIMITS.edgesPerProjection, 'projection edges').map((value) => {
     const parsed = edge(value, bounds, budget);
     uniqueId(parsed.id, seenEdges, 'edge ID');
     return parsed;
@@ -178,7 +212,7 @@ function projection(value: unknown, budget: Budget): Projection {
   };
   if (v.anchors !== undefined) {
     const seenAnchors = new Set<string>();
-    output.anchors = array(v.anchors, 50000, 'snap points').map((value) => {
+    output.anchors = array(v.anchors, LIMITS.anchorsPerProjection, 'snap points').map((value) => {
       if (++budget.anchors > 1000000) return invalid('snap points exceed the project limit.');
       const a = record(value, 'snap point'),
         id = identifier(a.id, 'snap point ID');
@@ -245,9 +279,10 @@ function part(value: unknown, budget: Budget): Part {
     const features = record(p.features, 'analytic features');
     const ids = new Set<string>();
     result.features = {
-      circles: array(features.circles, 24000, 'analytic circles').map((value) => {
+      circles: array(features.circles, LIMITS.circlesPerPart, 'analytic circles').map((value) => {
         budget.points += 2;
-        if (budget.points > 2000000) return invalid('analytic features exceed the project limit.');
+        if (budget.points > LIMITS.pointsPerProject)
+          return invalid('analytic features exceed the project limit.');
         const feature = record(value, 'analytic circle');
         const id = identifier(feature.id, 'analytic circle ID');
         uniqueId(id, ids, 'analytic circle ID');
@@ -451,7 +486,7 @@ function layout(value: unknown): DrawingLayout {
 
 /** Parse into fresh, whitelisted objects before any project content reaches the UI. */
 export function parseProject(text: string): ProjectData {
-  if (typeof text !== 'string' || text.length > MAX_TEXT_BYTES)
+  if (typeof text !== 'string' || text.length > MAX_PROJECT_BYTES)
     return invalid('file exceeds the 100 MB limit.');
   let input: unknown;
   try {
@@ -459,6 +494,10 @@ export function parseProject(text: string): ProjectData {
   } catch {
     return invalid('file is not valid JSON.');
   }
+  return projectData(input);
+}
+
+function projectData(input: unknown): ProjectData {
   const data = record(input, 'file');
   if (data.version !== 1) return invalid('unsupported project version.');
   const budget: Budget = { edges: 0, points: 0, anchors: 0, dimensions: 0 },
@@ -536,24 +575,24 @@ export function parseProject(text: string): ProjectData {
   };
 }
 
-export function serializeProject(
-  state: WorkspaceState & {
-    annotations?: Record<string, DrawingAnnotation[]>;
-    description?: string;
-  },
-): string {
-  const result = {
+/** One fresh validated document snapshot is shared by JSON and ZIP saving. */
+export function snapshotProject(state: WorkspaceState): ProjectData {
+  return projectData({
     version: 1,
     parts: state.parts,
     selected: [...state.selected],
     dimensions: state.dimensions,
     layouts: state.layouts,
     settings: state.settings,
-    annotations: state.annotations ?? {},
+    annotations: state.annotations,
     instructions: state.instructions,
-    description: state.description ?? '',
-  };
+    description: state.description,
+  });
+}
+
+export function serializeProject(state: WorkspaceState): string {
   // Saving and opening share one contract, so a saved workspace always reopens safely.
-  const validated = parseProject(JSON.stringify(result));
-  return JSON.stringify({ version: 1, ...validated });
+  const text = JSON.stringify({ version: 1, ...snapshotProject(state) });
+  if (text.length > MAX_PROJECT_BYTES) return invalid('file exceeds the 100 MB limit.');
+  return text;
 }

@@ -108,6 +108,13 @@ interface PointerGesture {
   creatingAnnotation?: boolean;
 }
 
+interface DrawingSnapshot {
+  part: Part;
+  views: Part['views'];
+  features: Part['features'];
+  contents: string;
+}
+
 /** Owns only screen interaction. Model measurements and paper layout never depend on zoom. */
 export class DrawingCanvas {
   private element?: HTMLElement;
@@ -130,7 +137,20 @@ export class DrawingCanvas {
   private annotationOptions = { ...defaultAnnotationOptions };
   private grid = { ...defaultGridSettings };
   private touches = new Map<number, Point2>();
-  private pinch?: { distance: number; midpoint: Point2; viewport: ViewportState };
+  private pinch?: {
+    ids: [number, number];
+    distance: number;
+    midpoint: Point2;
+    viewport: ViewportState;
+  };
+  private drawingArea?: Bounds2;
+  private gridMarkupKey?: string;
+  private drawingSnapshot?: DrawingSnapshot;
+  private mountedSheet?: RenderedDrawing;
+  private dimensionElements = new Map<string, SVGGElement>();
+  private annotationElements = new Map<string, SVGGElement>();
+  private paintedDimensions = new Set<string>();
+  private paintedAnnotation?: string;
   private readonly resize = new ResizeObserver(() => this.applyViewport());
 
   constructor(private readonly callbacks: CanvasCallbacks) {}
@@ -169,12 +189,39 @@ export class DrawingCanvas {
 
   setDocument(document?: CanvasDocument): RenderedDrawing | undefined {
     const old = this.document;
+    const snapshot = document ? this.snapshot(document) : undefined;
+    const selectionOnly =
+      this.sheet &&
+      this.mountedSheet === this.sheet &&
+      snapshot &&
+      this.drawingSnapshot &&
+      snapshot.part === this.drawingSnapshot.part &&
+      snapshot.views === this.drawingSnapshot.views &&
+      snapshot.features === this.drawingSnapshot.features &&
+      snapshot.contents === this.drawingSnapshot.contents;
+    if (selectionOnly) {
+      this.document = document;
+      this.applyViewport();
+      this.patchSelections();
+      this.patchAnnotations();
+      this.hint();
+      return this.sheet;
+    }
     if (old?.part.id !== document?.part.id) {
       this.cancel();
       this.viewport = fitViewport();
       this.metrics = undefined;
-    } else if (old?.layout !== document?.layout) this.cancel();
+    } else if (this.gesture || this.pinch) this.cancel();
     this.document = document;
+    this.drawingSnapshot = undefined;
+    this.mountedSheet = undefined;
+    this.drawingArea = undefined;
+    this.gridMarkupKey = undefined;
+    this.dimensionElements.clear();
+    this.annotationElements.clear();
+    this.paintedDimensions.clear();
+    this.paintedAnnotation = undefined;
+    this.highlightDimension();
     if (!document) {
       this.sheet = undefined;
       this.element?.querySelector('#paper-host')?.replaceChildren();
@@ -191,7 +238,8 @@ export class DrawingCanvas {
       document.part,
       document.dimensions,
       document.settings,
-      this.readOnly ? undefined : document.selectedDimension,
+      // Selection is a retained workspace highlight; the cached drawing stays export-neutral.
+      undefined,
       document.layout,
       {
         annotations: document.annotations,
@@ -199,10 +247,17 @@ export class DrawingCanvas {
         instructions: document.instructions,
       },
     );
+    this.drawingSnapshot = snapshot;
     const host = this.element?.querySelector<HTMLElement>('#paper-host');
     if (host) {
       host.className = 'paper-host';
       host.innerHTML = this.sheet.svg;
+      this.mountedSheet = this.sheet;
+      for (const group of this.element!.querySelectorAll<SVGGElement>('[data-dimension-id]'))
+        if (group.dataset.dimensionId) this.dimensionElements.set(group.dataset.dimensionId, group);
+      for (const group of this.element!.querySelectorAll<SVGGElement>('[data-annotation-id]'))
+        if (group.dataset.annotationId)
+          this.annotationElements.set(group.dataset.annotationId, group);
       this.element!.classList.add('has-sheet');
       this.applyViewport();
       this.patchSelections();
@@ -211,6 +266,32 @@ export class DrawingCanvas {
     }
     this.hint();
     return this.sheet;
+  }
+
+  private snapshot(document: CanvasDocument): DrawingSnapshot {
+    const { part } = document;
+    return {
+      part,
+      views: part.views,
+      features: part.features,
+      // Source projection geometry is immutable after import; edited metadata is compared by value.
+      contents: JSON.stringify([
+        part.name,
+        part.sourceName,
+        part.sourceKind,
+        part.bounds,
+        part.views.map((view) => [view.id, view.name]),
+        part.gearSpecification,
+        part.manufacturing,
+        part.features?.gear,
+        document.dimensions,
+        document.annotations ?? [],
+        document.settings,
+        document.layout,
+        document.instructions ?? '',
+        document.appearance ?? 'paper',
+      ]),
+    };
   }
 
   setEnabled(value: boolean): void {
@@ -372,22 +453,29 @@ export class DrawingCanvas {
     }
   }
   cancel(): void {
-    const gesture = this.gesture;
-    this.gesture = undefined;
-    this.pinch = undefined;
-    this.touches.clear();
+    const gesture = this.releaseGestures();
     this.pendingPoint = undefined;
     this.pendingEdge = undefined;
     this.draft = undefined;
     this.hovered = undefined;
     this.highlightDimension();
     this.restoreGesture(gesture);
-    this.marqueeFeedback();
-    if (gesture && this.element?.hasPointerCapture(gesture.pointerId))
-      this.element.releasePointerCapture(gesture.pointerId);
-    this.element?.classList.remove('panning', 'dimension-dragging');
     this.feedback();
     this.hint();
+  }
+
+  private releaseGestures(): PointerGesture | undefined {
+    const gesture = this.gesture;
+    const captured = new Set(this.touches.keys());
+    if (gesture) captured.add(gesture.pointerId);
+    this.gesture = undefined;
+    this.pinch = undefined;
+    this.touches.clear();
+    for (const id of captured)
+      if (this.element?.hasPointerCapture(id)) this.element.releasePointerCapture(id);
+    this.element?.classList.remove('panning', 'dimension-dragging');
+    this.marqueeFeedback();
+    return gesture;
   }
 
   private applyViewport(resizing = true): void {
@@ -452,9 +540,11 @@ export class DrawingCanvas {
     let overlay = svg.querySelector<SVGGElement>('[data-workspace-grid]');
     if (!this.grid.visible) {
       overlay?.remove();
+      this.gridMarkupKey = undefined;
       return;
     }
     if (!overlay) {
+      this.gridMarkupKey = undefined;
       overlay = document.createElementNS('http://www.w3.org/2000/svg', 'g');
       overlay.dataset.workspaceGrid = '';
       overlay.setAttribute('pointer-events', 'none');
@@ -462,17 +552,24 @@ export class DrawingCanvas {
       // The page background stays opaque; the grid sits behind all drawing primitives.
       svg.insertBefore(overlay, svg.querySelector(':scope > g'));
     }
+    const content = this.currentDrawingArea();
+    if (!content) return;
+    const scale = getViewportTransform(this.viewport, this.metrics).scale;
+    const key = JSON.stringify([content, this.grid.spacing, scale, this.document.appearance]);
+    if (this.gridMarkupKey === key) return;
+    this.gridMarkupKey = key;
     overlay.innerHTML = applyDrawingAppearance(
-      renderWorkspaceGrid(
-        drawingPage(
-          drawingSettingsForInstructions(this.document.settings, this.document.instructions),
-          this.document.part,
-        ).content,
-        this.grid,
-        getViewportTransform(this.viewport, this.metrics).scale,
-      ),
+      renderWorkspaceGrid(content, this.grid, scale),
       this.document.appearance,
     );
+  }
+
+  private currentDrawingArea(): Bounds2 | undefined {
+    if (!this.document) return;
+    return (this.drawingArea ??= drawingPage(
+      drawingSettingsForInstructions(this.document.settings, this.document.instructions),
+      this.document.part,
+    ).content);
   }
   private local(event: { clientX: number; clientY: number }): Point2 {
     const rect = this.element!.getBoundingClientRect();
@@ -533,22 +630,14 @@ export class DrawingCanvas {
     }
     // Palm contact can precede the pen tip. The pen owns the stroke from this point onward.
     if (event.pointerType === 'pen' && (this.gesture || this.pinch)) this.cancel();
+    if (this.pinch && event.pointerType !== 'touch') return;
     this.pointerClient = [event.clientX, event.clientY];
     this.element.focus({ preventScroll: true });
     if (event.pointerType === 'touch') {
       this.touches.set(event.pointerId, this.local(event));
-      if (this.touches.size === 2) {
-        this.restoreGesture(this.gesture);
-        this.gesture = undefined;
-        this.marqueeFeedback();
-        this.element.classList.remove('dimension-dragging');
-        const [a, b] = [...this.touches.values()];
-        this.pinch = {
-          distance: Math.max(1, Math.hypot(b[0] - a[0], b[1] - a[1])),
-          midpoint: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2],
-          viewport: structuredClone(this.viewport),
-        };
-        this.element.setPointerCapture(event.pointerId);
+      this.element.setPointerCapture(event.pointerId);
+      if (this.touches.size >= 2) {
+        if (!this.pinch) this.beginPinch();
         event.preventDefault();
         return;
       }
@@ -649,61 +738,51 @@ export class DrawingCanvas {
     } else if (pan) this.element.classList.add('panning');
   };
 
+  private beginPinch(): void {
+    this.restoreGesture(this.gesture);
+    this.gesture = undefined;
+    this.marqueeFeedback();
+    this.element?.classList.remove('panning', 'dimension-dragging');
+    const [[first, a], [second, b]] = [...this.touches.entries()];
+    this.pinch = {
+      ids: [first, second],
+      distance: Math.max(1, Math.hypot(b[0] - a[0], b[1] - a[1])),
+      midpoint: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2],
+      viewport: structuredClone(this.viewport),
+    };
+  }
+
+  private updatePinch(): void {
+    if (!this.pinch || !this.metrics) return;
+    const a = this.touches.get(this.pinch.ids[0]),
+      b = this.touches.get(this.pinch.ids[1]);
+    if (!a || !b) return;
+    const distance = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    const midpoint: Point2 = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+    this.viewport = panViewport(
+      zoomAt(
+        this.pinch.viewport,
+        this.metrics,
+        this.pinch.midpoint,
+        (this.pinch.viewport.zoom * distance) / this.pinch.distance,
+      ),
+      [midpoint[0] - this.pinch.midpoint[0], midpoint[1] - this.pinch.midpoint[1]],
+    );
+    this.applyViewport(false);
+  }
+
   private pointerMove = (event: PointerEvent): void => {
     if (!this.enabled || !this.document || !this.metrics) return;
     if (this.gesture?.pointerType === 'pen' && this.gesture.pointerId !== event.pointerId) return;
     this.pointerClient = [event.clientX, event.clientY];
     if (event.pointerType === 'touch' && this.touches.has(event.pointerId))
       this.touches.set(event.pointerId, this.local(event));
-    if (this.pinch && this.touches.size >= 2) {
-      const [a, b] = [...this.touches.values()];
-      const distance = Math.hypot(b[0] - a[0], b[1] - a[1]);
-      const midpoint: Point2 = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
-      this.viewport = panViewport(
-        zoomAt(
-          this.pinch.viewport,
-          this.metrics,
-          this.pinch.midpoint,
-          (this.pinch.viewport.zoom * distance) / this.pinch.distance,
-        ),
-        [midpoint[0] - this.pinch.midpoint[0], midpoint[1] - this.pinch.midpoint[1]],
-      );
-      this.applyViewport(false);
+    if (this.pinch) {
+      if (this.pinch.ids.includes(event.pointerId)) this.updatePinch();
       return;
     }
     if (this.gesture?.pointerId === event.pointerId) {
-      const gesture = this.gesture;
-      const dx = event.clientX - gesture.startClient[0],
-        dy = event.clientY - gesture.startClient[1];
-      const coalescedMovement =
-        !gesture.moved &&
-        gesture.pointerType === 'pen' &&
-        gesture.creatingAnnotation &&
-        gesture.annotation?.kind === 'freehand' &&
-        typeof event.getCoalescedEvents === 'function' &&
-        event
-          .getCoalescedEvents()
-          .some(
-            (sample) =>
-              Math.hypot(
-                sample.clientX - gesture.startClient[0],
-                sample.clientY - gesture.startClient[1],
-              ) >= 3,
-          );
-      if (!gesture.moved && Math.hypot(dx, dy) < 3 && !coalescedMovement) return;
-      gesture.moved = true;
-      if (gesture.viewport) {
-        this.viewport = panViewport(gesture.viewport, [dx, dy]);
-        this.applyViewport(false);
-      } else if (gesture.marquee) {
-        gesture.marquee.endSheet = this.sheetPoint(event);
-        gesture.marquee.endClient = [event.clientX, event.clientY];
-        this.marqueeFeedback();
-      } else if (gesture.annotation) {
-        this.previewAnnotation(gesture, event);
-      } else if (gesture.dimension && this.sheet) {
-        this.previewDrag(gesture, event);
-      }
+      this.updateGesture(this.gesture, event);
       return;
     }
     if (this.readOnly || isAnnotationTool(this.tool)) return;
@@ -718,10 +797,55 @@ export class DrawingCanvas {
     } else if (this.tool === 'select') this.highlightDimension(this.dimensionAt(event));
   };
 
+  /** Release samples follow the same path as moves, including coalesced pen motion. */
+  private updateGesture(gesture: PointerGesture, event: PointerEvent): void {
+    const dx = event.clientX - gesture.startClient[0],
+      dy = event.clientY - gesture.startClient[1];
+    const coalescedMovement =
+      !gesture.moved &&
+      gesture.pointerType === 'pen' &&
+      gesture.creatingAnnotation &&
+      gesture.annotation?.kind === 'freehand' &&
+      typeof event.getCoalescedEvents === 'function' &&
+      event
+        .getCoalescedEvents()
+        .some(
+          (sample) =>
+            Math.hypot(
+              sample.clientX - gesture.startClient[0],
+              sample.clientY - gesture.startClient[1],
+            ) >= 3,
+        );
+    if (!gesture.moved && Math.hypot(dx, dy) < 3 && !coalescedMovement) return;
+    gesture.moved = true;
+    if (gesture.viewport) {
+      this.viewport = panViewport(gesture.viewport, [dx, dy]);
+      this.applyViewport(false);
+    } else if (gesture.marquee) {
+      gesture.marquee.endSheet = this.sheetPoint(event);
+      gesture.marquee.endClient = [event.clientX, event.clientY];
+      this.marqueeFeedback();
+    } else if (gesture.annotation) {
+      this.previewAnnotation(gesture, event);
+    } else if (gesture.dimension && this.sheet) {
+      this.previewDrag(gesture, event);
+    }
+  }
+
   private pointerUp = (event: PointerEvent): void => {
-    if (this.touches.has(event.pointerId)) this.touches.delete(event.pointerId);
+    const trackedTouch = this.touches.has(event.pointerId);
+    if (trackedTouch) {
+      this.touches.set(event.pointerId, this.local(event));
+      if (this.pinch?.ids.includes(event.pointerId)) this.updatePinch();
+      this.touches.delete(event.pointerId);
+    }
     if (this.pinch) {
+      if (!trackedTouch || !this.pinch.ids.includes(event.pointerId)) return;
       this.pinch = undefined;
+      if (this.touches.size >= 2) {
+        this.beginPinch();
+        return;
+      }
       const remaining = [...this.touches.entries()][0];
       if (remaining && this.element && this.metrics) {
         const rect = this.element.getBoundingClientRect(),
@@ -744,14 +868,9 @@ export class DrawingCanvas {
     }
     const gesture = this.gesture;
     if (!gesture || gesture.pointerId !== event.pointerId) return;
-    if (
-      gesture.pointerType === 'pen' &&
-      gesture.creatingAnnotation &&
-      gesture.annotation?.kind === 'freehand' &&
-      Math.hypot(event.clientX - gesture.startClient[0], event.clientY - gesture.startClient[1]) >=
-        3
-    )
-      gesture.moved = true;
+    this.pointerClient = [event.clientX, event.clientY];
+    this.updateGesture(gesture, event);
+    if (this.gesture !== gesture) return;
     this.gesture = undefined;
     if (this.element?.hasPointerCapture(event.pointerId))
       this.element.releasePointerCapture(event.pointerId);
@@ -780,7 +899,6 @@ export class DrawingCanvas {
         this.restoreGesture(gesture);
         return;
       }
-      if (gesture.moved) this.previewAnnotation(gesture, event);
       const next = gesture.annotationPreview ?? gesture.annotation;
       if (!gesture.moved) {
         this.restoreGesture(gesture);
@@ -837,7 +955,6 @@ export class DrawingCanvas {
       this.patchSelections();
       this.patchAnnotations();
     } else if (gesture.dimension && gesture.moved && gesture.preview) {
-      this.previewDrag(gesture, event);
       if (!gesture.preview || !gesture.previews?.length) {
         this.restoreGesture(gesture);
         return;
@@ -875,13 +992,15 @@ export class DrawingCanvas {
     }
   };
   private pointerCancel = (event: PointerEvent): void => {
-    this.touches.delete(event.pointerId);
-    if (this.gesture?.pointerId !== event.pointerId && !this.pinch) return;
-    this.restoreGesture(this.gesture);
-    this.gesture = undefined;
-    this.pinch = undefined;
-    this.marqueeFeedback();
-    this.element?.classList.remove('panning', 'dimension-dragging');
+    const trackedTouch = this.touches.has(event.pointerId);
+    if (
+      this.gesture?.pointerId !== event.pointerId &&
+      !(trackedTouch && this.pinch?.ids.includes(event.pointerId))
+    ) {
+      this.touches.delete(event.pointerId);
+      return;
+    }
+    this.restoreGesture(this.releaseGestures());
   };
   private wheel = (event: WheelEvent): void => {
     if (!this.enabled || !this.document || !this.metrics) return;
@@ -1146,12 +1265,18 @@ export class DrawingCanvas {
     this.patchAnnotations();
   }
   private annotationElement(id: string): SVGGElement | undefined {
-    return [...(this.element?.querySelectorAll<SVGGElement>('[data-annotation-id]') ?? [])].find(
-      (group) => group.dataset.annotationId === id,
-    );
+    return this.annotationElements.get(id);
   }
   private removeAnnotationPreview(id: string): void {
     this.annotationElement(id)?.remove();
+    this.annotationElements.delete(id);
+  }
+  private replaceGroup(group: SVGGElement, markup: string): SVGGElement | undefined {
+    const next = group.nextElementSibling,
+      parent = group.parentElement;
+    group.outerHTML = markup;
+    return (next ? next.previousElementSibling : parent?.lastElementChild) as
+      SVGGElement | undefined;
   }
   private patchAnnotation(annotation: DrawingAnnotation, preview = false): void {
     if (!this.document) return;
@@ -1161,14 +1286,23 @@ export class DrawingCanvas {
       this.document.appearance,
     );
     const existing = this.annotationElement(annotation.id);
-    if (existing) existing.outerHTML = markup;
-    else
-      this.element
-        ?.querySelector<SVGGElement>('[data-review-annotations]')
-        ?.insertAdjacentHTML('beforeend', markup);
+    if (existing) {
+      const replacement = this.replaceGroup(existing, markup);
+      if (replacement) this.annotationElements.set(annotation.id, replacement);
+    } else {
+      const container = this.element?.querySelector<SVGGElement>('[data-review-annotations]');
+      container?.insertAdjacentHTML('beforeend', markup);
+      const group = container?.lastElementChild as SVGGElement | undefined;
+      if (group) this.annotationElements.set(annotation.id, group);
+    }
   }
   private patchAnnotations(): void {
-    for (const annotation of this.document?.annotations ?? []) this.patchAnnotation(annotation);
+    const next = this.readOnly ? undefined : this.document?.selectedAnnotation;
+    if (next === this.paintedAnnotation) return;
+    for (const annotation of this.document?.annotations ?? [])
+      if (annotation.id === next || annotation.id === this.paintedAnnotation)
+        this.patchAnnotation(annotation);
+    this.paintedAnnotation = next;
   }
 
   private selectedIds(): Set<string> {
@@ -1224,24 +1358,27 @@ export class DrawingCanvas {
 
   private patchDimension(dimension: Dimension): void {
     if (!this.document || !this.sheet) return;
-    const group = [
-      ...(this.element?.querySelectorAll<SVGGElement>('[data-dimension-id]') ?? []),
-    ].find((el) => el.dataset.dimensionId === dimension.id);
-    if (group)
-      group.outerHTML = renderDimension(
-        dimension,
-        this.sheet.viewTransforms[dimension.viewId],
-        this.document.settings.precision,
-        !this.readOnly && this.selectedIds().has(dimension.id),
-        this.document.appearance,
+    const group = this.dimensionElements.get(dimension.id);
+    if (group) {
+      const replacement = this.replaceGroup(
+        group,
+        renderDimension(
+          dimension,
+          this.sheet.viewTransforms[dimension.viewId],
+          this.document.settings.precision,
+          !this.readOnly && this.selectedIds().has(dimension.id),
+          this.document.appearance,
+        ),
       );
+      if (replacement) {
+        this.dimensionElements.set(dimension.id, replacement);
+        replacement.classList.toggle('dimension-hover', this.hoverDimension === dimension.id);
+      }
+    }
   }
   private dimensionFits(dimension: Dimension): boolean {
     if (!this.document || !this.sheet) return false;
-    const frame = drawingPage(
-      drawingSettingsForInstructions(this.document.settings, this.document.instructions),
-      this.document.part,
-    ).content;
+    const frame = this.currentDrawingArea()!;
     const bounds = dimensionGeometry(
       dimension,
       this.sheet.viewTransforms[dimension.viewId],
@@ -1255,13 +1392,18 @@ export class DrawingCanvas {
     );
   }
   private patchSelections(): void {
-    for (const d of this.document?.dimensions ?? []) this.patchDimension(d);
+    const next = this.readOnly ? new Set<string>() : this.selectedIds();
+    for (const dimension of this.document?.dimensions ?? [])
+      if (next.has(dimension.id) !== this.paintedDimensions.has(dimension.id))
+        this.patchDimension(dimension);
+    this.paintedDimensions = next;
   }
   private highlightDimension(id?: string): void {
     if (this.hoverDimension === id) return;
+    if (this.hoverDimension)
+      this.dimensionElements.get(this.hoverDimension)?.classList.remove('dimension-hover');
     this.hoverDimension = id;
-    for (const group of this.element?.querySelectorAll<SVGGElement>('[data-dimension-id]') ?? [])
-      group.classList.toggle('dimension-hover', group.dataset.dimensionId === id);
+    if (id) this.dimensionElements.get(id)?.classList.add('dimension-hover');
     this.element?.classList.toggle('over-dimension', Boolean(id));
   }
   private scheduleFeedback(): void {

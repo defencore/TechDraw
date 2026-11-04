@@ -7,7 +7,10 @@ export interface ProjectSource {
 }
 export const MAX_SOURCE_BYTES = 64 * 1024 * 1024;
 
-export function validateSource(source: ProjectSource): ProjectSource {
+/** Validate source metadata and size without allocating another copy of its contents. */
+export function inspectSource(
+  source: ProjectSource,
+): Omit<ProjectSource, 'bytes'> & { size: number } {
   if (typeof source.id !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(source.id))
     throw new Error('Source ID is invalid.');
   if (
@@ -25,10 +28,15 @@ export function validateSource(source: ProjectSource): ProjectSource {
     source.bytes.length > MAX_SOURCE_BYTES
   )
     throw new Error('An original source must contain 1 byte to 64 MB.');
+  return { id: source.id, name: source.name, kind: source.kind, size: source.bytes.length };
+}
+
+export function validateSource(source: ProjectSource): ProjectSource {
+  const metadata = inspectSource(source);
   return {
-    id: source.id,
-    name: source.name,
-    kind: source.kind,
+    id: metadata.id,
+    name: metadata.name,
+    kind: metadata.kind,
     bytes: new Uint8Array(source.bytes),
   };
 }

@@ -45,6 +45,11 @@ The application is a static TypeScript/Vite project with a small shared data mod
 | `src/state.ts`                                             | Drawing defaults, workspace shape and per-part annotation/instruction/layout snapshot history       |
 | `src/workspace-document.ts`                                | Document edits, per-part history, physical layout lifecycle, part removal and project replacement   |
 | `src/main.ts`                                              | Application orchestration, shared command dispatch, import/export and controller integration        |
+| `src/application/workspace-files.ts`                       | Exclusive import/open/save/PDF/prepare operations, cancellation generations and source lifecycle     |
+| `src/application/workspace-save-state.ts`                  | Saved-document checkpoints over editable data without traversing immutable CAD geometry             |
+| `src/ui/manufacturing-editor-controller.ts`                | Instruction, gear and profile editor lifecycle with one prevalidated boundary commit               |
+| `src/ui/inspector-tabs.ts`, `workspace-view-state.ts`       | Accessible panel navigation and per-part panel scroll/expansion context                             |
+| `src/io/project-limits.ts`                                 | Shared DXF import and project geometry budgets                                                      |
 | `src/ui/command-registry.ts`                               | Canonical commands, availability reasons, active state, shortcuts and typing-safe shortcut matching |
 | `src/ui/command-palette.ts`                                | Persistent searchable command dialog with keyboard navigation and live availability checks          |
 | `src/ui/context-menu.ts`                                   | Contextual command menu with shared availability, keyboard navigation and focus return              |
@@ -87,6 +92,16 @@ The application is a static TypeScript/Vite project with a small shared data mod
 | `public/examples/`                                         | Original CC0 STEP assemblies and a millimetre DXF inspection plate                                  |
 
 ## Data flow
+
+`WorkspaceFiles` owns operation exclusivity, progress and cancellation. A cancelled generation cannot append parts, replace a project or clear a newer operation's busy state. File reads check cancellation before starting CAD; the DXF example fetch is abortable. Saving and PDF export disable conflicting edits until completion. Removing the last part referencing a source releases its retained bytes. JSON and ZIP use one validated `snapshotProject`; source content limits are checked before original buffers are copied.
+
+`ManufacturingEditorController` owns instruction and gear drafts and coordinates the profile controller. Save/export first prepare and validate every relevant branch, then commit changed values and render once. Explicit history reconciliation runs even while an editor is hidden, invalidating drafts whose committed baseline changed during any Undo/Redo step. Unrelated history leaves raw drafts intact. Tolerance drafts follow the same baseline rule and remain explicit Apply-only data.
+
+`WorkspaceSaveState` compares editable data at successful Save/Open checkpoints. It excludes viewport/navigation state and does not walk STEP projection arrays. The unload guard checks document changes and real pending drafts; merely reopening a saved drawing is not an unsaved edit.
+
+On desktop the application occupies a bounded viewport; file and inspector panels scroll independently. Smaller screens retain normal page flow. Hidden inspector editors are lazy providers, tab keys use a single keyboard stop with Left/Right/Home/End navigation, and panel context is keyed by part and tab. Rebuilding a panel restores its scroll and explicitly opened sections without moving the paper or outer page.
+
+Canvas selection updates compare a semantic drawing snapshot and reuse the canonical unselected SVG when only highlights change. Editable metadata, settings, dimensions, locks, annotations and layout invalidate the snapshot even when mutated in place. Mounted annotation groups are indexed for dragging/highlights. Grid refresh reuses the current physical drawing bounds and skips unchanged markup; viewport movement does not repeat table wrapping. Final pointer samples, including pen-up coalesced points, are consumed before gesture completion, and extra touch contacts cannot become ink or replace a pinch unexpectedly.
 
 1. Original local STEP/DXF bytes are copied before processing and registered in `SourceRepository` after a successful import. Each resulting part receives the source ID; multiple placed STEP solids can reference one original assembly file. STEP input becomes a transferable `ArrayBuffer` sent to the CAD worker without detaching the preserved copy. DXF follows the separate planar parser.
 2. The worker loads Open CASCADE from a bundled WASM asset. STEP transfer normalizes length units to millimetres.
