@@ -4,6 +4,19 @@ export interface StepProduct {
   paths: string[][];
 }
 
+/** Exporter boilerplate is not a useful part label for a single-solid file. */
+export function stepPartDisplayName(
+  productName: string | undefined,
+  sourceName: string,
+  solidCount: number,
+  index: number,
+): string {
+  const genericExporter = /^open\s*cascade\s+step\s+translator(?:\s*[\d.]+)*$/i;
+  if (solidCount === 1 && (!productName || genericExporter.test(productName.trim())))
+    return sourceName.replace(/\.(step|stp)$/i, '');
+  return productName || `Solid ${index + 1}`;
+}
+
 interface RecordData {
   type: string;
   body: string;

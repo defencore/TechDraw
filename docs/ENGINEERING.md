@@ -37,6 +37,8 @@ Section 4 requires the A4 title block along the short edge, so GOST A4 templates
 
 Frame geometry alone does not certify a complete manufacturing drawing. A complete review also considers the applicable editions and national adoptions of GOST 2.301 (formats), 2.302 (scales), 2.303 (lines), 2.304 (lettering), 2.305 (views and sections), and 2.307 (dimensions and limit deviations), together with the contract's requirements.
 
+Automatic drawing-scale selection uses the part-drawing series in GOST 2.302-68 clause 2, rather than arbitrary decimal scaling. This includes reductions such as 1:2.5 and 1:4 and enlargements such as 2.5:1 and 4:1. The physical layout accounts for view contours, captions, centre lines and dimension geometry before choosing a scale. A cached project layout retains its saved scale and view transforms until an explicit layout operation or a relevant sheet-setting change. [GOST 2.302-68, reproduced standard PDF](https://eelib.narod.ru/eskd/GOST_2.302-68.pdf), [official standard catalogue](https://protect.gost.ru/gost/details/b8e1f82a-8ad2-4133-8c49-2570711b7e22).
+
 For review:
 
 - Use the minimum sufficient set of dimensions to define the shape and location of each required feature.

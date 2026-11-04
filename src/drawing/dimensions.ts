@@ -1,5 +1,10 @@
-import type { Dimension, Part, Point2, Point3, ProjectedEdge, Projection } from '../model';
-import { dimensionLeaderMetrics, formatDimensionLabel } from './dimension-label';
+import type { Bounds2, Dimension, Part, Point2, Point3, ProjectedEdge, Projection } from '../model';
+import {
+  dimensionLabelBoundsAt,
+  dimensionLeaderMetrics,
+  formatDimensionLabel,
+} from './dimension-label';
+import { dimensionGeometry } from './dimension-geometry';
 
 const near = (a: number, b: number) => Math.abs(a - b) < 1e-5;
 const unique = (values: number[]) =>
@@ -12,6 +17,134 @@ export interface ArrangeOptions {
   scale?: number;
   precision?: number;
   part?: Part;
+}
+
+const boxesOverlap = (a: Bounds2, b: Bounds2, gap = 0) =>
+  a.minX <= b.maxX + gap &&
+  a.maxX >= b.minX - gap &&
+  a.minY <= b.maxY + gap &&
+  a.maxY >= b.minY - gap;
+
+function pointSegmentDistance(point: Point2, a: Point2, b: Point2): number {
+  const dx = b[0] - a[0],
+    dy = b[1] - a[1],
+    lengthSquared = dx * dx + dy * dy;
+  const t = lengthSquared
+    ? Math.max(0, Math.min(1, ((point[0] - a[0]) * dx + (point[1] - a[1]) * dy) / lengthSquared))
+    : 0;
+  return Math.hypot(point[0] - a[0] - t * dx, point[1] - a[1] - t * dy);
+}
+
+function segmentHitsBox(a: Point2, b: Point2, bounds: Bounds2, gap = 0): boolean {
+  let low = 0,
+    high = 1;
+  for (const [axis, min, max] of [
+    [0, bounds.minX - gap, bounds.maxX + gap],
+    [1, bounds.minY - gap, bounds.maxY + gap],
+  ]) {
+    const delta = b[axis] - a[axis];
+    if (Math.abs(delta) < 1e-12) {
+      if (a[axis] < min || a[axis] > max) return false;
+    } else {
+      const first = (min - a[axis]) / delta,
+        last = (max - a[axis]) / delta;
+      low = Math.max(low, Math.min(first, last));
+      high = Math.min(high, Math.max(first, last));
+      if (low > high) return false;
+    }
+  }
+  return true;
+}
+
+/** Keep complete circle callouts outside the view, with leaders clear of neighboring holes. */
+function arrangeCircleCallouts(result: Dimension[], scale: number, precision: number, part?: Part) {
+  const views = new Set(result.map((dimension) => dimension.viewId));
+  for (const viewId of views) {
+    const projection = part?.views.find((view) => view.id === viewId);
+    const circles = result.filter(
+      (dimension) => dimension.viewId === viewId && ['diameter', 'radius'].includes(dimension.kind),
+    );
+    if (!circles.length) continue;
+    const occupied = result
+      .filter(
+        (dimension) =>
+          dimension.viewId === viewId && !['diameter', 'radius'].includes(dimension.kind),
+      )
+      .map(
+        (dimension) => dimensionGeometry(dimension, { x: 0, y: 0, scale }, precision).labelBounds,
+      );
+    const obstacles = (projection?.edges ?? []).filter(
+      (edge) =>
+        !edge.hidden &&
+        edge.kind === 'circle' &&
+        edge.closed !== false &&
+        edge.center &&
+        edge.radius,
+    );
+    const order = [...circles].sort(
+      (a, b) => b.a[1] - a.a[1] || b.value - a.value || a.a[0] - b.a[0] || a.id.localeCompare(b.id),
+    );
+    for (const d of order) {
+      delete d.textOffset;
+      const originalSide = d.offset < 0 ? -1 : 1;
+      const sides = projection && d.automatic ? [originalSide, -originalSide] : [originalSide];
+      const radius = Math.hypot(d.b[0] - d.a[0], d.b[1] - d.a[1]) * scale;
+      const label = formatDimensionLabel(d, precision);
+      const metrics = dimensionLeaderMetrics(d, precision);
+      let best:
+        | { score: number; side: number; travel: number; yOffset: number; bounds: Bounds2 }
+        | undefined;
+      for (const side of sides) {
+        const rim: Point2 =
+          d.kind === 'radius'
+            ? [d.b[0] * scale, -d.b[1] * scale]
+            : [d.a[0] * scale + side * radius * 0.7071, -d.a[1] * scale - radius * 0.7071];
+        const boundary = projection
+          ? (side > 0 ? projection.bounds.maxX : projection.bounds.minX) * scale
+          : rim[0];
+        const travel = Math.max(10, side * (boundary - rim[0]) + 4);
+        const elbowX = rim[0] + side * travel;
+        const baseY = rim[1] - travel * 0.6;
+        const candidates = [baseY];
+        if (projection)
+          candidates.push(
+            rim[1] - 6,
+            rim[1],
+            -projection.bounds.maxY * scale - 6,
+            -projection.bounds.minY * scale + 6,
+          );
+        for (let lane = 1; lane <= occupied.length + circles.length + 4; lane++)
+          candidates.push(baseY - lane * 6, baseY + lane * 6);
+        for (const y of unique(candidates)) {
+          const origin: Point2 = [elbowX + side * metrics.halfLength, y + metrics.baselineOffset];
+          const bounds = dimensionLabelBoundsAt(label, origin);
+          const labelCollisions = occupied.filter((box) => boxesOverlap(bounds, box, 1.5)).length;
+          const leader: Point2 = [elbowX, y];
+          const holeCrossings = obstacles.filter((edge) => {
+            if (near(edge.center![0], d.a[0]) && near(edge.center![1], d.a[1])) return false;
+            const center: Point2 = [edge.center![0] * scale, -edge.center![1] * scale];
+            return pointSegmentDistance(center, rim, leader) < edge.radius! * scale + 0.6;
+          }).length;
+          const labelCrossings = occupied.filter((box) =>
+            segmentHitsBox(rim, leader, box, 0.7),
+          ).length;
+          const score =
+            labelCollisions * 1e8 +
+            holeCrossings * 1e6 +
+            labelCrossings * 1e4 +
+            Math.abs(y - baseY) +
+            travel +
+            (side === originalSide ? 0 : 0.5) +
+            (y > baseY ? 0.01 : 0);
+          if (!best || score < best.score)
+            best = { score, side, travel, yOffset: y - baseY, bounds };
+        }
+      }
+      d.offset = best!.side * best!.travel;
+      if (Math.abs(best!.yOffset) > 1e-9) d.textOffset = [0, best!.yOffset];
+      occupied.push(best!.bounds);
+    }
+  }
 }
 
 /** Place nested spans in ascending lanes; only separated spans may share a lane. */
@@ -131,42 +264,7 @@ export function arrangeDimensions(
       placed.push(span);
     }
   }
-  const circles = new Map<string, Dimension[]>();
-  for (const d of result.filter((d) => d.kind === 'diameter' || d.kind === 'radius')) {
-    delete d.textOffset;
-    d.offset = d.offset < 0 ? -10 : 10;
-    const key = `${d.viewId}:${d.offset < 0 ? '-' : '+'}`;
-    if (!circles.has(key)) circles.set(key, []);
-    circles.get(key)!.push(d);
-  }
-  for (const items of circles.values()) {
-    const boxes = items
-      .map((d) => {
-        const side = d.offset < 0 ? -1 : 1,
-          radius = Math.hypot(d.b[0] - d.a[0], d.b[1] - d.a[1]) * scale;
-        const rimX = d.kind === 'radius' ? d.b[0] * scale : d.a[0] * scale + side * radius * 0.7071;
-        const rimY = d.kind === 'radius' ? -d.b[1] * scale : -d.a[1] * scale - radius * 0.7071;
-        const metrics = dimensionLeaderMetrics(d, precision);
-        const label = formatDimensionLabel(d, precision);
-        const x = rimX + side * (Math.abs(d.offset) + metrics.halfLength);
-        const y = rimY - Math.abs(d.offset) * 0.6 + metrics.baselineOffset;
-        return { d, x, y, bounds: label.bounds };
-      })
-      .sort((a, b) => b.y + b.bounds.maxY - a.y - a.bounds.maxY || a.x - b.x);
-    const placed: typeof boxes = [];
-    for (const box of boxes) {
-      const initial = box.y;
-      for (const prior of placed)
-        if (
-          box.x + box.bounds.minX <= prior.x + prior.bounds.maxX + 2 &&
-          box.x + box.bounds.maxX >= prior.x + prior.bounds.minX - 2 &&
-          box.y + box.bounds.maxY > prior.y + prior.bounds.minY - 1.5
-        )
-          box.y = prior.y + prior.bounds.minY - 1.5 - box.bounds.maxY;
-      if (box.y !== initial) box.d.textOffset = [0, box.y - initial];
-      placed.push(box);
-    }
-  }
+  arrangeCircleCallouts(result, scale, precision, options.part);
   return result;
 }
 
@@ -185,6 +283,87 @@ function circularEnvelope(view: Projection): ProjectedEdge | undefined {
       Math.abs(edge.center[0] - (view.bounds.minX + view.bounds.maxX) / 2) < 1e-4 &&
       Math.abs(edge.center[1] - (view.bounds.minY + view.bounds.maxY) / 2) < 1e-4,
   );
+}
+
+/** Broad analytic arcs describe profile curvature without promoting every small fillet. */
+function dominantProfileArcs(view: Projection): ProjectedEdge[] {
+  const span = Math.max(view.bounds.maxX - view.bounds.minX, view.bounds.maxY - view.bounds.minY);
+  const turn = Math.PI * 2;
+  const groups: { edge: ProjectedEdge; intervals: [number, number][]; longest: number }[] = [];
+  for (const edge of view.edges) {
+    if (
+      edge.hidden ||
+      edge.kind !== 'circle' ||
+      edge.closed !== false ||
+      !edge.center ||
+      !edge.radius ||
+      edge.radius < span * 0.4 ||
+      edge.points.length < 2
+    )
+      continue;
+    if (
+      view.edges.some(
+        (other) =>
+          !other.hidden &&
+          other.kind === 'circle' &&
+          other.closed !== false &&
+          other.center &&
+          other.radius &&
+          near(other.radius, edge.radius!) &&
+          near(other.center[0], edge.center![0]) &&
+          near(other.center[1], edge.center![1]),
+      )
+    )
+      continue;
+    let sweep = 0;
+    const intervals: [number, number][] = [];
+    for (let index = 1; index < edge.points.length; index++) {
+      const previous = edge.points[index - 1],
+        current = edge.points[index];
+      const first = Math.atan2(previous[1] - edge.center[1], previous[0] - edge.center[0]);
+      const last = Math.atan2(current[1] - edge.center[1], current[0] - edge.center[0]);
+      let angle = last - first;
+      while (angle > Math.PI) angle -= Math.PI * 2;
+      while (angle < -Math.PI) angle += Math.PI * 2;
+      sweep += Math.abs(angle);
+      const start = (((angle >= 0 ? first : last) % turn) + turn) % turn;
+      const end = start + Math.abs(angle);
+      intervals.push([start, Math.min(end, turn)]);
+      if (end > turn) intervals.push([0, end - turn]);
+    }
+    const group = groups.find(
+      (group) =>
+        near(group.edge.radius!, edge.radius!) &&
+        near(group.edge.center![0], edge.center![0]) &&
+        near(group.edge.center![1], edge.center![1]),
+    );
+    if (group) {
+      group.intervals.push(...intervals);
+      if (sweep > group.longest) {
+        group.edge = edge;
+        group.longest = sweep;
+      }
+    } else groups.push({ edge, intervals, longest: sweep });
+  }
+  const sweep = (intervals: [number, number][]) => {
+    let total = 0,
+      end = -Infinity;
+    for (const [low, high] of intervals.sort((a, b) => a[0] - b[0])) {
+      total += Math.max(0, high - Math.max(low, end));
+      end = Math.max(end, high);
+    }
+    return total;
+  };
+  return groups
+    .map((group) => ({ ...group, sweep: sweep(group.intervals) }))
+    .filter((group) => group.sweep >= Math.PI / 4 - 1e-6)
+    .sort((a, b) => b.sweep - a.sweep || b.edge.radius! - a.edge.radius!)
+    .filter(
+      (group, index, sorted) =>
+        sorted.findIndex((other) => near(other.edge.radius!, group.edge.radius!)) === index,
+    )
+    .slice(0, 3)
+    .map((group) => group.edge);
 }
 
 function baselineCandidates(
@@ -241,6 +420,67 @@ function baselineCandidates(
     ),
     circles,
   };
+}
+
+function physicalSpan(d: Dimension): { axis: number; min: number; max: number } | undefined {
+  if (d.viewId === 'iso' || !['horizontal', 'vertical'].includes(d.kind)) return;
+  const horizontal = d.kind === 'horizontal';
+  const axis =
+    d.viewId === 'front'
+      ? horizontal
+        ? 0
+        : 2
+      : d.viewId === 'top'
+        ? horizontal
+          ? 0
+          : 1
+        : horizontal
+          ? 1
+          : 2;
+  const sign = (d.viewId === 'top' && !horizontal) || (d.viewId === 'right' && horizontal) ? -1 : 1;
+  const index = horizontal ? 0 : 1;
+  const a = d.a[index] * sign,
+    b = d.b[index] * sign;
+  return { axis, min: Math.min(a, b), max: Math.max(a, b) };
+}
+
+function samePhysicalSpan(a: Dimension, b: Dimension): boolean {
+  const first = physicalSpan(a),
+    second = physicalSpan(b);
+  return (
+    !!first &&
+    !!second &&
+    first.axis === second.axis &&
+    near(first.min, second.min) &&
+    near(first.max, second.max)
+  );
+}
+
+/** One physical baseline interval needs one annotation, preferably beside its visible feature. */
+function deduplicateLinearDimensions(dimensions: Dimension[], part: Part): Dimension[] {
+  const score = (dimension: Dimension) => {
+    const view = part.views.find((view) => view.id === dimension.viewId)!;
+    const coordinate = dimension.kind === 'horizontal' ? 0 : 1;
+    return view.edges.some(
+      (edge) =>
+        !edge.hidden &&
+        edge.kind === 'circle' &&
+        edge.center &&
+        (near(edge.center[coordinate], dimension.a[coordinate]) ||
+          near(edge.center[coordinate], dimension.b[coordinate])),
+    )
+      ? 1
+      : 0;
+  };
+  return dimensions.filter((dimension, index) => {
+    if (!physicalSpan(dimension)) return true;
+    return !dimensions.some(
+      (other, otherIndex) =>
+        samePhysicalSpan(dimension, other) &&
+        (score(other) > score(dimension) ||
+          (score(other) === score(dimension) && otherIndex < index)),
+    );
+  });
 }
 
 type SourceCircle = NonNullable<Part['features']>['circles'][number];
@@ -321,33 +561,40 @@ export function autoDimensionWarnings(part: Part, dimensions?: Dimension[]): str
         ]
       : [];
   }
-  let omitted = 0;
+  const omitted: Dimension[] = [];
+  const present = dimensions ?? autoDimensions(part);
   for (const view of part.views.filter((v) => v.id !== 'iso')) {
     const { xs, ys, circles } = baselineCandidates(part, view);
-    const missing = (coordinates: number[], kind: 'horizontal' | 'vertical') =>
-      coordinates.filter(
-        (coordinate) =>
-          !dimensions?.some((d) => {
-            const axis = kind === 'horizontal' ? 0 : 1;
-            const datum = axis === 0 ? view.bounds.minX : view.bounds.minY;
-            return (
-              d.viewId === view.id &&
-              d.kind === kind &&
-              near(Math.min(d.a[axis], d.b[axis]), datum) &&
-              near(Math.max(d.a[axis], d.b[axis]), coordinate)
-            );
-          }),
-      ).length;
-    if (view.id === 'front' || circles.length)
-      omitted += dimensions
-        ? missing(xs, 'horizontal') + missing(ys, 'vertical')
-        : Math.max(0, xs.length - 5) + Math.max(0, ys.length - 5);
-    else if (view.id === 'top')
-      omitted += dimensions ? missing(ys, 'vertical') : Math.max(0, ys.length - 5);
+    const missing = (coordinates: number[], kind: 'horizontal' | 'vertical') => {
+      for (const coordinate of coordinates) {
+        const datum: Point2 = [view.bounds.minX, view.bounds.minY];
+        const endpoint: Point2 =
+          kind === 'horizontal' ? [coordinate, datum[1]] : [datum[0], coordinate];
+        const proposal: Dimension = {
+          id: '',
+          viewId: view.id,
+          kind,
+          a: datum,
+          b: endpoint,
+          value: 1,
+          offset: 9,
+          automatic: true,
+        };
+        if (
+          !present.some((dimension) => samePhysicalSpan(dimension, proposal)) &&
+          !omitted.some((dimension) => samePhysicalSpan(dimension, proposal))
+        )
+          omitted.push(proposal);
+      }
+    };
+    if (view.id === 'front' || circles.length) {
+      missing(xs, 'horizontal');
+      missing(ys, 'vertical');
+    } else if (view.id === 'top') missing(ys, 'vertical');
   }
-  return omitted
+  return omitted.length
     ? [
-        `${omitted} additional baseline coordinates are available. The initial dimension set is limited for readability; use manual dimensions to complete the drawing.`,
+        `${omitted.length} profile coordinates are not included in the current dimensions. Choose All baseline coordinates to inspect them, then keep the dimensions needed for manufacture.`,
       ]
     : [];
 }
@@ -416,7 +663,10 @@ export function autoDimensions(part: Part, detail: 'balanced' | 'full' = 'balanc
       push(end, 'radius', [...outerArc.center], [...rim], maxRadius, 10);
     }
     const transverseExtent = horizontal ? maxY - minY : maxX - minX;
-    if (transverseExtent > largestClosed * 2 + 1e-5)
+    if (
+      transverseExtent > largestClosed * 2 + 1e-5 &&
+      !(outerArc && near(transverseExtent, maxRadius * 2))
+    )
       push(
         side,
         horizontal ? 'vertical' : 'horizontal',
@@ -457,7 +707,15 @@ export function autoDimensions(part: Part, detail: 'balanced' | 'full' = 'balanc
       if (diameters.has(key)) continue;
       diameters.add(key);
       const count = distinctCircles.filter((c) => near(c.radius!, circle.radius!)).length;
-      const c = circle.center!;
+      const c = distinctCircles
+        .filter((candidate) => near(candidate.radius!, circle.radius!))
+        .sort((a, b) => {
+          const distance = (edge: ProjectedEdge) =>
+            Math.min(edge.center![0] - minX, maxX - edge.center![0]);
+          return (
+            distance(a) - distance(b) || b.center![1] - a.center![1] || b.center![0] - a.center![0]
+          );
+        })[0].center!;
       push(
         view,
         'diameter',
@@ -468,19 +726,37 @@ export function autoDimensions(part: Part, detail: 'balanced' | 'full' = 'balanc
         count > 1 ? ` (${count}x)` : undefined,
       );
     }
+    for (const arc of dominantProfileArcs(view)) {
+      const rim = arc.points[Math.floor(arc.points.length / 2)];
+      push(
+        view,
+        'radius',
+        [...arc.center!],
+        [...rim],
+        arc.radius!,
+        rim[0] < arc.center![0] ? -10 : 10,
+      );
+    }
 
     const budget = detail === 'full' ? Infinity : 5;
+    const coordinates = (values: number[], axis: number) => {
+      const isCenter = (coordinate: number) =>
+        distinctCircles.some((circle) => near(circle.center![axis], coordinate));
+      return [...values.filter(isCenter), ...values.filter((coordinate) => !isCenter(coordinate))]
+        .slice(0, budget)
+        .sort((a, b) => a - b);
+    };
     if (view.id === 'front' || distinctCircles.length) {
-      for (const [index, x] of xs.slice(0, budget).entries())
+      for (const [index, x] of coordinates(xs, 0).entries())
         push(view, 'horizontal', [minX, minY], [x, minY], x - minX, 15 + index * 6);
-      for (const [index, y] of ys.slice(0, budget).entries())
+      for (const [index, y] of coordinates(ys, 1).entries())
         push(view, 'vertical', [minX, minY], [minX, y], y - minY, 15 + index * 6);
     } else if (view.id === 'top') {
-      for (const [index, y] of ys.slice(0, budget).entries())
+      for (const [index, y] of coordinates(ys, 1).entries())
         push(view, 'vertical', [minX, minY], [minX, y], y - minY, 15 + index * 6);
     }
   }
-  return arrangeDimensions(dimensions, { part });
+  return arrangeDimensions(deduplicateLinearDimensions(dimensions, part), { part });
 }
 
 export function formatDimension(dimension: Dimension, precision: number): string {

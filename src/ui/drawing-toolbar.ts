@@ -85,7 +85,7 @@ export function renderWorkspaceControls({
     ${divider}
     <div class="dock-group dimension-tools" role="group" aria-label="Add dimensions">${dimensionTools.map(({ id, label, icon, shortcut }) => control(`tool:${id}`, label, icon, { shortcut, selected: tool === id, dimension: true })).join('')}</div>
     ${divider}
-    <div class="dock-group automatic-tools" role="group" aria-label="Automatic dimensions">${control('auto-dimensions', 'Auto dimensions', 'magic')}${control('arrange-dimensions', 'Arrange dimension lines', 'layers')}</div>
+    <div class="dock-group automatic-tools" role="group" aria-label="Automatic dimensions">${control('auto-dimensions', 'Refresh automatic suggestions', 'magic')}${control('arrange-dimensions', 'Auto layout', 'layers')}</div>
     ${divider}
     <div class="dock-group history-tools" role="group" aria-label="History">${control('undo', 'Undo', 'undo', { disabled: !canUndo, shortcut: 'Control+Z Meta+Z', keyHint: 'Ctrl/⌘ Z' })}${control('redo', 'Redo', 'redo', { disabled: !canRedo, shortcut: 'Control+Shift+Z Meta+Shift+Z', keyHint: 'Ctrl/⌘ Shift Z' })}</div>
   </div>

@@ -309,7 +309,7 @@ test('circle label collisions move their connected leaders and layout can be hel
     },
   ];
   const arranged = arrangeDimensions(circles);
-  assert.ok(arranged.some((d) => (d.textOffset?.[1] ?? 0) <= -6));
+  assert.ok(arranged.some((d) => Math.abs(d.textOffset?.[1] ?? 0) >= 6));
   const original = renderDrawing(part, circles, settings);
   const moved = structuredClone(circles);
   moved[0].textOffset = [10, -10];
@@ -538,6 +538,10 @@ test('coaxial shaft stations come from source circles rather than helical projec
   const radius = dimensions.find((d) => d.kind === 'radius')!;
   assert.equal(radius.value, 4);
   assert.deepEqual(radius.b, [4, 8], 'radius leader anchors a real sampled arc point');
+  assert.ok(
+    dimensions.every((d) => !(d.viewId === 'front' && d.kind === 'vertical' && d.value === 8)),
+    'the exact outer radius already conveys the circular envelope size',
+  );
   assert.deepEqual(autoDimensionWarnings(model, dimensions), []);
 });
 

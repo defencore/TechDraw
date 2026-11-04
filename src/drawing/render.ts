@@ -1,27 +1,17 @@
-import type {
-  Bounds2,
-  Dimension,
-  DrawingSettings,
-  Part,
-  Point2,
-  Projection,
-  ViewId,
-} from '../model';
+import type { Dimension, DrawingSettings, Part, Point2, Projection, ViewId } from '../model';
 import { autoDimensionWarnings } from './dimensions';
+import { dimensionGeometry, toPaper, type ViewTransform } from './dimension-geometry';
 import {
-  DIMENSION_LABEL_GAP,
-  dimensionLabelBoundsAt,
-  dimensionLeaderMetrics,
-  formatDimensionLabel,
-  type DimensionLabel,
-} from './dimension-label';
+  calculateDrawingLayout,
+  drawingLayoutFits,
+  drawingPage,
+  dimensionLabelsOverlap,
+  projectionMetrics,
+} from './page-layout';
 import { isGostTemplate, renderGostForm1 } from './gost-form1';
+export { paperSize } from './page-layout';
+export type { ViewTransform } from './dimension-geometry';
 
-export interface ViewTransform {
-  x: number;
-  y: number;
-  scale: number;
-}
 export interface RenderedDrawing {
   svg: string;
   width: number;
@@ -42,58 +32,7 @@ const text = (x: number, y: number, value: unknown, size = 3, attrs = '') =>
   `<text x="${n(x)}" y="${n(y)}" font-size="${size}" stroke="none" ${attrs}>${escapeXml(value)}</text>`;
 const line = (a: Point2, b: Point2, attrs = '') =>
   `<line x1="${n(a[0])}" y1="${n(a[1])}" x2="${n(b[0])}" y2="${n(b[1])}" ${attrs}/>`;
-function extensionGeometry(
-  anchor: Point2,
-  target: Point2,
-): { start: Point2; end: Point2 } | undefined {
-  const dx = target[0] - anchor[0],
-    dy = target[1] - anchor[1];
-  const distance = Math.hypot(dx, dy);
-  if (distance < 1) return;
-  const ux = dx / distance,
-    uy = dy / distance;
-  return { start: [anchor[0] + ux, anchor[1] + uy], end: [target[0] + ux * 2, target[1] + uy * 2] };
-}
-function extensionLine(anchor: Point2, target: Point2): string {
-  const extension = extensionGeometry(anchor, target);
-  return extension ? line(extension.start, extension.end) : '';
-}
-const sheetPoint = (p: Point2, t: ViewTransform): Point2 => [
-  t.x + p[0] * t.scale,
-  t.y - p[1] * t.scale,
-];
 const scaleLabel = (scale: number): string => (scale >= 1 ? `${n(scale)}:1` : `1:${n(1 / scale)}`);
-
-function angularLabelOrigin(
-  vertex: Point2,
-  start: number,
-  delta: number,
-  radius: number,
-  label: DimensionLabel,
-): Point2 {
-  const mid = start + delta / 2,
-    ux = Math.cos(mid),
-    uy = Math.sin(mid);
-  const bounds = label.bounds;
-  const nearest = Math.min(
-    ...[
-      [bounds.minX, bounds.minY],
-      [bounds.maxX, bounds.minY],
-      [bounds.maxX, bounds.maxY],
-      [bounds.minX, bounds.maxY],
-    ].map(([x, y]) => x * ux + y * uy),
-  );
-  const distance = radius + DIMENSION_LABEL_GAP - nearest;
-  return [vertex[0] + ux * distance, vertex[1] + uy * distance];
-}
-
-export function paperSize(
-  settings: Pick<DrawingSettings, 'format' | 'orientation'>,
-): [number, number] {
-  const formats = { A4: [210, 297], A3: [297, 420], A2: [420, 594], A1: [594, 841] } as const;
-  const [short, long] = formats[settings.format];
-  return settings.orientation === 'landscape' ? [long, short] : [short, long];
-}
 
 export function renderDimension(
   d: Dimension,
@@ -101,130 +40,35 @@ export function renderDimension(
   precision: number,
   selected: boolean,
 ): string {
-  const a = sheetPoint(d.a, t),
-    b = sheetPoint(d.b, t);
+  const geometry = dimensionGeometry(d, t, precision);
   const color = selected ? '#16745e' : '#20262b';
-  const label = formatDimensionLabel(d, precision);
-  const labelHalf = label.width / 2;
-  const baselineOffset = -DIMENSION_LABEL_GAP - label.bounds.maxY;
-  const tx = d.textOffset?.[0] ?? 0,
-    ty = d.textOffset?.[1] ?? 0;
-  let content = '';
-  // Explicit filled triangles and label backgrounds render identically in SVG and PDF.
-  const arrow = (tip: Point2, towardBase: Point2) => {
-    const length = Math.hypot(towardBase[0], towardBase[1]) || 1;
-    const ux = towardBase[0] / length,
-      uy = towardBase[1] / length;
-    const base: Point2 = [tip[0] + ux * 2.7, tip[1] + uy * 2.7];
-    const left: Point2 = [base[0] - uy * 0.85, base[1] + ux * 0.85];
-    const right: Point2 = [base[0] + uy * 0.85, base[1] - ux * 0.85];
-    return `<path class="dimension-arrow" d="M${f(tip)} L${f(left)} L${f(right)} Z" fill="${color}" stroke="none"/>`;
-  };
-  const dimensionLine = (p: Point2, q: Point2) =>
-    line(p, q, 'data-dimension-grip="line"') +
-    arrow(p, [q[0] - p[0], q[1] - p[1]]) +
-    arrow(q, [p[0] - q[0], p[1] - q[1]]);
-  const gripLine = (p: Point2, q: Point2) => line(p, q, 'data-dimension-grip="line"');
-  const labelAt = (p: Point2, angle = 0, includeOffset = true) => {
-    const x = p[0] + (includeOffset ? tx : 0),
-      y = p[1] + (includeOffset ? ty : 0);
-    const runs = label.runs
-      .map(
-        (run) =>
-          `<text x="${n(x + run.x)}" y="${n(y + run.y)}" fill="${color}" stroke="none" text-anchor="${run.anchor}" font-size="${run.fontSize}" data-dimension-label-run="${run.role}">${escapeXml(run.text)}</text>`,
-      )
-      .join('');
-    return `<g class="dimension-label" data-dimension-grip="label" aria-label="${escapeXml(label.plainText)}"${angle ? ` transform="rotate(${angle} ${n(x)} ${n(y)})"` : ''}><rect x="${n(x + label.bounds.minX)}" y="${n(y + label.bounds.minY)}" width="${n(label.width)}" height="${n(label.height)}" fill="white" stroke="none"/>${runs}</g>`;
-  };
-  if (d.kind === 'horizontal') {
-    const y = Math.max(a[1], b[1]) + d.offset;
-    const left = Math.min(a[0], b[0]),
-      right = Math.max(a[0], b[0]);
-    const short = right - left < labelHalf * 2 + 5;
-    content =
-      extensionLine(a, [a[0], y]) +
-      extensionLine(b, [b[0], y]) +
-      (short
-        ? gripLine([left, y], [right, y]) +
-          gripLine([left - 4, y], [left, y]) +
-          arrow([left, y], [-1, 0]) +
-          gripLine([right + 4, y], [right, y]) +
-          arrow([right, y], [1, 0])
-        : dimensionLine([a[0], y], [b[0], y])) +
-      labelAt([short ? right + 5 + labelHalf : (a[0] + b[0]) / 2, y + baselineOffset]);
-  } else if (d.kind === 'vertical') {
-    const x = Math.min(a[0], b[0]) - d.offset;
-    const top = Math.min(a[1], b[1]),
-      bottom = Math.max(a[1], b[1]);
-    const short = bottom - top < labelHalf * 2 + 5;
-    content =
-      extensionLine(a, [x, a[1]]) +
-      extensionLine(b, [x, b[1]]) +
-      (short
-        ? gripLine([x, top], [x, bottom]) +
-          gripLine([x, top - 4], [x, top]) +
-          arrow([x, top], [0, -1]) +
-          gripLine([x, bottom + 4], [x, bottom]) +
-          arrow([x, bottom], [0, 1])
-        : dimensionLine([x, a[1]], [x, b[1]])) +
-      labelAt([x + baselineOffset, short ? top - 5 - labelHalf : (a[1] + b[1]) / 2], -90);
-  } else if (d.kind === 'aligned') {
-    const dx = b[0] - a[0],
-      dy = b[1] - a[1],
-      length = Math.hypot(dx, dy) || 1;
-    const normal: Point2 = [-dy / length, dx / length];
-    const p: Point2 = [a[0] + normal[0] * d.offset, a[1] + normal[1] * d.offset];
-    const q: Point2 = [b[0] + normal[0] * d.offset, b[1] + normal[1] * d.offset];
-    const angle = (Math.atan2(dy, dx) * 180) / Math.PI;
-    const labelAngle = angle > 90 || angle < -90 ? angle + 180 : angle;
-    const radians = (labelAngle * Math.PI) / 180;
-    content =
-      extensionLine(a, p) +
-      extensionLine(b, q) +
-      dimensionLine(p, q) +
-      labelAt(
-        [
-          (p[0] + q[0]) / 2 - Math.sin(radians) * baselineOffset,
-          (p[1] + q[1]) / 2 + Math.cos(radians) * baselineOffset,
-        ],
-        labelAngle,
-      );
-  } else if (d.kind === 'diameter' || d.kind === 'radius') {
-    const radius = Math.hypot(b[0] - a[0], b[1] - a[1]);
-    const side = d.offset < 0 ? -1 : 1;
-    const point: Point2 =
-      d.kind === 'radius' ? b : [a[0] + side * radius * 0.7071, a[1] - radius * 0.7071];
-    const elbow: Point2 = [point[0] + d.offset + tx, point[1] - Math.abs(d.offset) * 0.6 + ty];
-    const metrics = dimensionLeaderMetrics(d, precision);
-    const end: Point2 = [elbow[0] + side * metrics.halfLength * 2, elbow[1]];
-    content =
-      gripLine(point, elbow) +
-      arrow(point, [elbow[0] - point[0], elbow[1] - point[1]]) +
-      gripLine(elbow, end) +
-      labelAt([(elbow[0] + end[0]) / 2, elbow[1] + metrics.baselineOffset], 0, false);
-  } else if (d.kind === 'angle') {
-    const vertex = sheetPoint(d.vertex ?? d.a, t);
-    const start = Math.atan2(a[1] - vertex[1], a[0] - vertex[0]);
-    let delta = Math.atan2(b[1] - vertex[1], b[0] - vertex[0]) - start;
-    while (delta > Math.PI) delta -= Math.PI * 2;
-    while (delta < -Math.PI) delta += Math.PI * 2;
-    const radius = Math.max(6, Math.abs(d.offset));
-    const p: Point2 = [vertex[0] + Math.cos(start) * radius, vertex[1] + Math.sin(start) * radius];
-    const q: Point2 = [
-      vertex[0] + Math.cos(start + delta) * radius,
-      vertex[1] + Math.sin(start + delta) * radius,
-    ];
-    content =
-      line(vertex, p) +
-      line(vertex, q) +
-      `<path data-dimension-grip="line" d="M${f(p)} A${radius},${radius} 0 0 ${delta > 0 ? 1 : 0} ${f(q)}"/>` +
-      arrow(p, [-Math.sin(start) * Math.sign(delta), Math.cos(start) * Math.sign(delta)]) +
-      arrow(q, [
-        Math.sin(start + delta) * Math.sign(delta),
-        -Math.cos(start + delta) * Math.sign(delta),
-      ]) +
-      labelAt(angularLabelOrigin(vertex, start, delta, radius, label));
-  }
+  let content = geometry.lines
+    .map((segment) => line(segment.a, segment.b, segment.grip ? 'data-dimension-grip="line"' : ''))
+    .join('');
+  content += geometry.arcs
+    .map(
+      (arc) =>
+        `<path data-dimension-grip="line" d="M${f(arc.a)} A${arc.radius},${arc.radius} 0 0 ${arc.delta > 0 ? 1 : 0} ${f(arc.b)}"/>`,
+    )
+    .join('');
+  content += geometry.arrows
+    .map(
+      (triangle) =>
+        `<path class="dimension-arrow" d="M${f(triangle[0])} L${f(triangle[1])} L${f(triangle[2])} Z" fill="${color}" stroke="none"/>`,
+    )
+    .join('');
+  const {
+    origin: [x, y],
+    angle,
+    data,
+  } = geometry.label;
+  const runs = data.runs
+    .map(
+      (run) =>
+        `<text x="${n(x + run.x)}" y="${n(y + run.y)}" fill="${color}" stroke="none" text-anchor="${run.anchor}" font-size="${run.fontSize}" data-dimension-label-run="${run.role}">${escapeXml(run.text)}</text>`,
+    )
+    .join('');
+  content += `<g class="dimension-label" data-dimension-grip="label" aria-label="${escapeXml(data.plainText)}"${angle ? ` transform="rotate(${angle} ${n(x)} ${n(y)})"` : ''}><rect x="${n(x + data.bounds.minX)}" y="${n(y + data.bounds.minY)}" width="${n(data.width)}" height="${n(data.height)}" fill="white" stroke="none"/>${runs}</g>`;
   return `<g class="dimension${selected ? ' selected' : ''}" data-dimension-id="${escapeXml(d.id)}" data-view-id="${d.viewId}" fill="none" stroke="${color}" stroke-width="${selected ? 0.4 : 0.18}" style="cursor:move">${content}</g>`;
 }
 
@@ -233,7 +77,7 @@ function projectionMarkup(view: Projection, t: ViewTransform, settings: DrawingS
   for (const edge of [...view.edges].sort((a, b) => Number(b.hidden) - Number(a.hidden))) {
     if (edge.hidden && !settings.hiddenLines) continue;
     if (edge.points.length < 2) continue;
-    const path = edge.points.map((p, i) => `${i ? 'L' : 'M'}${f(sheetPoint(p, t))}`).join(' ');
+    const path = edge.points.map((p, i) => `${i ? 'L' : 'M'}${f(toPaper(p, t))}`).join(' ');
     markup += `<path d="${path}" data-edge-id="${escapeXml(edge.id)}" data-view-id="${view.id}" fill="none" stroke="${edge.hidden ? '#7d858a' : '#20262b'}" stroke-width="${edge.hidden ? 0.18 : 0.32}" ${edge.hidden ? 'stroke-dasharray="2 1"' : ''} style="cursor:crosshair"/>`;
     if (
       settings.centerLines &&
@@ -242,7 +86,7 @@ function projectionMarkup(view: Projection, t: ViewTransform, settings: DrawingS
       edge.center &&
       edge.radius
     ) {
-      const c = sheetPoint(edge.center, t),
+      const c = toPaper(edge.center, t),
         r = edge.radius * t.scale + 3;
       markup += `<g fill="none" stroke="#667983" stroke-width=".15" stroke-dasharray="4 1 .7 1">${line([c[0] - r, c[1]], [c[0] + r, c[1]])}${line([c[0], c[1] - r], [c[0], c[1] + r])}</g>`;
     }
@@ -264,7 +108,7 @@ function projectionMarkup(view: Projection, t: ViewTransform, settings: DrawingS
     const key = anchor.point.map((v) => v.toFixed(5)).join(',');
     if (emitted.has(key)) continue;
     emitted.add(key);
-    const p = sheetPoint(anchor.point, t);
+    const p = toPaper(anchor.point, t);
     markup += `<circle class="snap-anchor" data-anchor-id="${escapeXml(anchor.id)}" data-view-id="${view.id}" data-model-x="${anchor.point[0]}" data-model-y="${anchor.point[1]}" cx="${n(p[0])}" cy="${n(p[1])}" r="1.2" fill="#16745e" fill-opacity="0" stroke="none" style="cursor:crosshair"/>`;
   }
   return markup;
@@ -328,137 +172,6 @@ function wrapText(
   return { lines: lines.slice(0, limit), omitted };
 }
 
-/** Bounds include paper-space labels and leaders, rather than a global margin guess. */
-function occupiedBounds(
-  view: Projection,
-  dimensions: Dimension[],
-  scale: number,
-  precision: number,
-): Bounds2 {
-  const bounds: Bounds2 = {
-    minX: view.bounds.minX * scale,
-    maxX: view.bounds.maxX * scale,
-    minY: -view.bounds.maxY * scale,
-    maxY: -view.bounds.minY * scale,
-  };
-  const add = (x: number, y: number) => {
-    bounds.minX = Math.min(bounds.minX, x);
-    bounds.maxX = Math.max(bounds.maxX, x);
-    bounds.minY = Math.min(bounds.minY, y);
-    bounds.maxY = Math.max(bounds.maxY, y);
-  };
-  const includeExtension = (anchor: Point2, target: Point2) => {
-    add(target[0], target[1]);
-    const extension = extensionGeometry(anchor, target);
-    if (extension) {
-      add(extension.start[0], extension.start[1]);
-      add(extension.end[0], extension.end[1]);
-    }
-  };
-  for (const d of dimensions.filter((item) => item.viewId === view.id)) {
-    const a: Point2 = [d.a[0] * scale, -d.a[1] * scale],
-      b: Point2 = [d.b[0] * scale, -d.b[1] * scale];
-    const labelData = formatDimensionLabel(d, precision);
-    const labelHalf = labelData.width / 2;
-    const baselineOffset = -DIMENSION_LABEL_GAP - labelData.bounds.maxY;
-    const tx = d.textOffset?.[0] ?? 0,
-      ty = d.textOffset?.[1] ?? 0;
-    const label = (x: number, y: number, angle = 0) => {
-      const occupied = dimensionLabelBoundsAt(labelData, [x + tx, y + ty], angle);
-      add(occupied.minX, occupied.minY);
-      add(occupied.maxX, occupied.maxY);
-    };
-    if (d.kind === 'horizontal') {
-      const y = Math.max(a[1], b[1]) + d.offset;
-      const left = Math.min(a[0], b[0]),
-        right = Math.max(a[0], b[0]);
-      const short = right - left < labelHalf * 2 + 5;
-      includeExtension(a, [a[0], y]);
-      includeExtension(b, [b[0], y]);
-      if (short) {
-        add(left - 4, y);
-        add(right + 4, y);
-      }
-      label(short ? right + 5 + labelHalf : (a[0] + b[0]) / 2, y + baselineOffset);
-    } else if (d.kind === 'vertical') {
-      const x = Math.min(a[0], b[0]) - d.offset;
-      const top = Math.min(a[1], b[1]),
-        bottom = Math.max(a[1], b[1]);
-      const short = bottom - top < labelHalf * 2 + 5;
-      includeExtension(a, [x, a[1]]);
-      includeExtension(b, [x, b[1]]);
-      if (short) {
-        add(x, top - 4);
-        add(x, bottom + 4);
-      }
-      label(x + baselineOffset, short ? top - 5 - labelHalf : (a[1] + b[1]) / 2, -90);
-    } else if (d.kind === 'diameter' || d.kind === 'radius') {
-      const r = Math.hypot(b[0] - a[0], b[1] - a[1]);
-      const side = d.offset < 0 ? -1 : 1;
-      const x = (d.kind === 'radius' ? b[0] : a[0] + side * r * 0.7071) + d.offset,
-        y = (d.kind === 'radius' ? b[1] : a[1] - r * 0.7071) - Math.abs(d.offset) * 0.6;
-      const metrics = dimensionLeaderMetrics(d, precision);
-      add(x + tx, y + ty);
-      add(x + side * metrics.halfLength * 2 + tx, y + ty);
-      label(x + side * metrics.halfLength, y + metrics.baselineOffset);
-    } else if (d.kind === 'aligned') {
-      const dx = b[0] - a[0],
-        dy = b[1] - a[1],
-        length = Math.hypot(dx, dy) || 1;
-      const nx = (-dy / length) * d.offset,
-        ny = (dx / length) * d.offset;
-      includeExtension(a, [a[0] + nx, a[1] + ny]);
-      includeExtension(b, [b[0] + nx, b[1] + ny]);
-      const angle = (Math.atan2(dy, dx) * 180) / Math.PI;
-      const labelAngle = angle > 90 || angle < -90 ? angle + 180 : angle;
-      const radians = (labelAngle * Math.PI) / 180;
-      label(
-        (a[0] + b[0]) / 2 + nx - Math.sin(radians) * baselineOffset,
-        (a[1] + b[1]) / 2 + ny + Math.cos(radians) * baselineOffset,
-        labelAngle,
-      );
-    } else {
-      const v = d.vertex ?? d.a,
-        vertex: Point2 = [v[0] * scale, -v[1] * scale];
-      const radius = Math.max(6, Math.abs(d.offset));
-      const start = Math.atan2(a[1] - vertex[1], a[0] - vertex[0]);
-      let delta = Math.atan2(b[1] - vertex[1], b[0] - vertex[0]) - start;
-      while (delta > Math.PI) delta -= Math.PI * 2;
-      while (delta < -Math.PI) delta += Math.PI * 2;
-      add(vertex[0] - radius - 3, vertex[1] - radius - 3);
-      add(vertex[0] + radius + 3, vertex[1] + radius + 3);
-      const origin = angularLabelOrigin(vertex, start, delta, radius, labelData);
-      label(origin[0], origin[1]);
-    }
-  }
-  return bounds;
-}
-
-function alignedBounds(
-  part: Part,
-  dimensions: Dimension[],
-  scale: number,
-  precision: number,
-): Record<ViewId, Bounds2> {
-  const bounds = Object.fromEntries(
-    part.views.map((view) => [view.id, occupiedBounds(view, dimensions, scale, precision)]),
-  ) as Record<ViewId, Bounds2>;
-  // Shared translation preserves orthographic alignment despite unequal dimension lanes.
-  if (bounds.front && bounds.top) {
-    const min = Math.min(bounds.front.minX, bounds.top.minX),
-      max = Math.max(bounds.front.maxX, bounds.top.maxX);
-    bounds.front.minX = bounds.top.minX = min;
-    bounds.front.maxX = bounds.top.maxX = max;
-  }
-  if (bounds.front && bounds.right) {
-    const min = Math.min(bounds.front.minY, bounds.right.minY),
-      max = Math.max(bounds.front.maxY, bounds.right.maxY);
-    bounds.front.minY = bounds.right.minY = min;
-    bounds.front.maxY = bounds.right.maxY = max;
-  }
-  return bounds;
-}
-
 export function renderDrawing(
   part: Part,
   dimensions: Dimension[],
@@ -466,101 +179,40 @@ export function renderDrawing(
   selectedDimensionId?: string,
   layoutOverride?: Pick<RenderedDrawing, 'scale' | 'viewTransforms'>,
 ): RenderedDrawing {
-  const [width, height] = paperSize(settings);
+  const page = drawingPage(settings);
+  const { width, height, left, right, top, bottom, blockHeight } = page;
+  const { minX: clipLeft, minY: clipTop, maxX: clipRight, maxY: clipBottom } = page.content;
   const gost = isGostTemplate(settings.template);
-  const verticalDesignation =
-    gost && settings.format !== 'A4' && settings.orientation === 'portrait';
-  const designationReserve = verticalDesignation ? 14 : 0;
-  const left = gost ? 20 : 10;
-  const right = 5,
-    top = 5,
-    bottom = 5;
-  const blockHeight = settings.template === 'minimal' ? 35 : 55;
-  const contentLeft = left + 5,
-    contentTop = top + (gost ? 20 : 10);
-  const contentWidth = width - contentLeft - right - 5 - designationReserve;
-  const contentHeight = height - blockHeight - contentTop - bottom - 13;
-  const clipLeft = left + 1,
-    clipTop = top + (gost ? 15 : 1),
-    clipRight = width - right - 1 - designationReserve,
-    clipBottom = height - bottom - blockHeight - 13;
-  const cellWidth = contentWidth / 2,
-    cellHeight = contentHeight / 2;
-  const fits = (scale: number) =>
-    Object.values(alignedBounds(part, dimensions, scale, settings.precision)).every(
-      (b) => b.maxX - b.minX <= cellWidth - 8 && b.maxY - b.minY <= cellHeight - 14,
-    );
-  const preferred = [
-    100, 50, 20, 10, 5, 2, 1, 0.5, 0.2, 0.1, 0.05, 0.02, 0.01, 0.005, 0.002, 0.001, 0.0005, 0.0002,
-    0.0001,
-  ];
-  const scale =
-    layoutOverride?.scale ??
-    (settings.scale === 'auto' ? (preferred.find(fits) ?? 0.0001) : settings.scale);
-  const bounds = alignedBounds(part, dimensions, scale, settings.precision);
+  const calculated = layoutOverride
+    ? undefined
+    : calculateDrawingLayout(part, dimensions, settings);
+  const scale = layoutOverride?.scale ?? calculated!.scale;
+  const transforms = layoutOverride?.viewTransforms ?? calculated!.viewTransforms;
+  const fits = layoutOverride
+    ? drawingLayoutFits(part, dimensions, settings, layoutOverride)
+    : calculated!.fits;
   const warnings: string[] = autoDimensionWarnings(part, dimensions);
-  const fitsContent = () =>
-    part.views.every((view) => {
-      const transform = layoutOverride?.viewTransforms[view.id];
-      if (
-        !transform ||
-        ![transform.x, transform.y, transform.scale].every(Number.isFinite) ||
-        transform.scale <= 0
-      )
-        return false;
-      const occupied = occupiedBounds(view, dimensions, transform.scale, settings.precision);
-      return (
-        occupied.minX + transform.x >= clipLeft &&
-        occupied.maxX + transform.x <= clipRight &&
-        occupied.minY + transform.y >= clipTop &&
-        occupied.maxY + transform.y <= clipBottom
-      );
-    });
-  if (!(layoutOverride ? fitsContent() : fits(scale)))
+  if (!fits)
     warnings.push(
       layoutOverride || settings.scale === 'auto'
         ? 'Dimensions exceed the drawing area. Use a larger sheet or reposition dimensions before export.'
-        : 'The selected scale exceeds the drawing area. Choose Auto scale or a larger sheet before export.',
+        : 'The selected scale exceeds the drawing area. Choose Auto fit or a larger sheet before export.',
     );
-  if (dimensions.length > 30)
+  if (
+    fits &&
+    dimensionLabelsOverlap(dimensions, { scale, viewTransforms: transforms }, settings.precision)
+  )
     warnings.push(
-      'Dense dimensions may overlap. Review and reposition dimensions or use a larger sheet.',
+      'Some dimension labels overlap. Use Auto layout or move the affected dimensions.',
     );
-  if (width === 210 && gost && settings.orientation === 'portrait')
-    warnings.push(
-      'A4 portrait has limited drawing space. A3 landscape is recommended for detailed parts.',
-    );
-  const cells: Record<ViewId, [number, number]> = {
-    right: [0, 0],
-    front: [1, 0],
-    iso: [0, 1],
-    top: [1, 1],
-  };
-  const transforms = {} as Record<ViewId, ViewTransform>;
   let views = '';
   for (const view of part.views) {
-    const [col, row] = cells[view.id];
-    const x0 = contentLeft + col * cellWidth,
-      y0 = contentTop + row * cellHeight;
-    const box = bounds[view.id];
-    const t: ViewTransform = layoutOverride?.viewTransforms[view.id] ?? {
-      x: x0 + (cellWidth - box.maxX + box.minX) / 2 - box.minX,
-      y: y0 + 9 + (cellHeight - 14 - box.maxY + box.minY) / 2 - box.minY,
-      scale,
-    };
-    transforms[view.id] = t;
-    const viewLabel =
-      settings.template === 'eskd-uk'
-        ? (
-            {
-              front: 'СПЕРЕДУ',
-              top: 'ЗВЕРХУ',
-              right: 'СПРАВА',
-              iso: 'ІЗОМЕТРІЯ',
-            } as const
-          )[view.id]
-        : view.name.toUpperCase();
-    views += `<g data-projection="${view.id}">${text(x0 + cellWidth / 2, y0 + 3, viewLabel, 2.5, 'text-anchor="middle" fill="#69737b" letter-spacing=".7"')}${projectionMarkup(view, t, settings)}${dimensions
+    const t = transforms[view.id];
+    if (!t) throw new Error(`Missing ${view.id} drawing transform.`);
+    const metrics =
+      calculated?.metrics[view.id] ?? projectionMetrics(view, dimensions, t.scale, settings);
+    const caption = metrics.caption;
+    views += `<g data-projection="${view.id}">${text(caption.origin[0] + t.x, caption.origin[1] + t.y, caption.text, 2.5, 'text-anchor="middle" fill="#69737b" letter-spacing=".7"')}${projectionMarkup(view, t, settings)}${dimensions
       .filter((d) => d.viewId === view.id)
       .map((d) => renderDimension(d, t, settings.precision, d.id === selectedDimensionId))
       .join('')}</g>`;

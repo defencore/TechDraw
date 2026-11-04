@@ -79,7 +79,7 @@ export async function exportPdf(pages: PdfPage[], filename = 'techdraw.pdf'): Pr
     )
   )
     throw new Error(
-      'The drawing does not fit the sheet. Choose Auto scale, a larger sheet or reposition dimensions.',
+      'The drawing does not fit the sheet. Choose Auto fit, a larger sheet or reposition dimensions.',
     );
   const first = rendered[0];
   const pdf = new jsPDF({

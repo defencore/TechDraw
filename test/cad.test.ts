@@ -5,7 +5,7 @@ import initOpenCascade from 'replicad-opencascadejs';
 import { exportSTEP, makeBaseBox, makeCylinder, setOC } from 'replicad';
 import { cleanProjectedEdges, importStep } from '../src/cad/engine';
 import type { ProjectedEdge } from '../src/model';
-import { readStepProducts } from '../src/cad/step-metadata';
+import { readStepProducts, stepPartDisplayName } from '../src/cad/step-metadata';
 import { createLinearDimension } from '../src/measurements';
 
 before(async () => {
@@ -76,6 +76,29 @@ test('real STEP preserves nominal dimensions, component placement, products and 
         (edge) => edge.kind === 'line' && edge.sourcePoints && Math.abs(edge.length! - 80) < 1e-6,
       ),
   );
+});
+
+test('single-solid exporter boilerplate falls back to the file stem while meaningful product names remain intact', async () => {
+  const generic = 'Open CASCADE STEP translator 7.8 5';
+  assert.equal(stepPartDisplayName(generic, 'flight-lower-cover.STEP', 1, 0), 'flight-lower-cover');
+  assert.equal(stepPartDisplayName(generic, 'assembly.step', 2, 0), generic);
+  assert.equal(
+    stepPartDisplayName('Open CASCADE mounting bracket', 'bracket.step', 1, 0),
+    'Open CASCADE mounting bracket',
+  );
+  assert.equal(
+    stepPartDisplayName('Open CASCADE STEP translator coupling', 'coupling.step', 1, 0),
+    'Open CASCADE STEP translator coupling',
+  );
+  const block = makeBaseBox(10, 12, 4);
+  try {
+    const source = exportSTEP([{ shape: block, name: generic }], { unit: 'MM', modelUnit: 'MM' });
+    const result = await importStep(await source.arrayBuffer(), 'flight-lower-cover.step');
+    assert.equal(result.parts[0].name, 'flight-lower-cover');
+    assert.deepEqual(result.parts[0].path, ['flight-lower-cover.step', 'flight-lower-cover']);
+  } finally {
+    block.delete();
+  }
 });
 
 test('projection cleanup removes coincident and hidden-over-visible strokes while preserving nearby detail', () => {

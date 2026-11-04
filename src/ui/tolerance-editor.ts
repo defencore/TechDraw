@@ -47,5 +47,5 @@ export function renderToleranceEditor(dimension: Dimension): string {
     <p id="tolerance-preview" class="field-help" aria-live="polite"></p>
     <p id="tolerance-error" class="layout-warning" role="alert" hidden></p>
     ${button('apply-tolerance', 'Apply tolerance', undefined, 'secondary tolerance-apply', mode === 'none' && !dimension.tolerance ? 'disabled' : '')}
-    <p class="field-help">Apply saves the tolerance to this dimension and its PDF. Undo restores the previous value. Use Arrange if labels need more space.</p><div class="inspector-rule"></div>`;
+    <p class="field-help">Apply saves the tolerance to this dimension and its PDF. Undo restores the previous value. Use Auto layout if labels need more space.</p><div class="inspector-rule"></div>`;
 }

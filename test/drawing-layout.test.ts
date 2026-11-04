@@ -5,6 +5,7 @@ import { initializeDrawing } from '../src/drawing/layout';
 import { arrangeDimensions } from '../src/drawing/dimensions';
 import { renderDrawing } from '../src/drawing/render';
 import { defaultSettings } from '../src/state';
+import { dimensionGeometry } from '../src/drawing/dimension-geometry';
 
 function samplePart(): Part {
   const views: Projection[] = (['front', 'top', 'right', 'iso'] as const).map((id) => ({
@@ -77,8 +78,23 @@ test('fresh automatic circle labels are separated at the final explicit 1:5 draw
   const after = labelPositions(
     renderDrawing(part, result.dimensions, settings, undefined, result.layout).svg,
   );
+  assert.equal(after.length, 2);
   assert.equal(result.layout.scale, 0.2);
-  assert.ok(Math.abs(after[0].y - after[1].y) >= 6 - 1e-5);
+  const boxes = result.dimensions.map(
+    (dimension) =>
+      dimensionGeometry(
+        dimension,
+        result.layout.viewTransforms[dimension.viewId],
+        settings.precision,
+      ).labelBounds,
+  );
+  assert.ok(
+    boxes[0].maxX <= boxes[1].minX ||
+      boxes[1].maxX <= boxes[0].minX ||
+      boxes[0].maxY <= boxes[1].minY ||
+      boxes[1].maxY <= boxes[0].minY,
+    'packed labels remain disjoint on either exterior side',
+  );
   assert.deepEqual(
     result.dimensions,
     arrangeDimensions(source, { scale: 0.2, precision: settings.precision, part }),

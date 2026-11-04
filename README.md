@@ -49,11 +49,13 @@ Zoom changes the on-screen view only. **Drawing scale** controls the printed siz
 
 The drawing dock keeps selection, panning and dimension tools together over the workspace. A separate compact zoom dock contains Fit and zoom controls.
 
+**Refresh automatic suggestions** updates geometric suggestions while retaining manual dimensions and explicit specifications. **Auto layout** repositions the existing views and annotation labels. Auto drawing scale selects a fitting scale from the GOST 2.302-68 part-drawing series, including 1:2.5, 1:4, 2.5:1 and 4:1. The isometric view can use a separate column when that improves the fit. Warnings above the workspace remain available while editing; use their layout or page-setup actions to address space problems and review the result.
+
 To specify a dimensional tolerance, select the dimension and use the **Tolerance** mode buttons in its editing panel. With **±**, enter only the numeric magnitude, such as `0.05`; the ± symbol is supplied automatically. For upper/lower deviations, set each sign with its sign controls and enter the values. For a fit, enter a designation such as `H7`. Review the preview and choose **Apply**. Changing the mode or typing a draft does not change the drawing until applied. **Clear** in the tolerance editor removes the applied tolerance. Linear deviations use millimetres; angular deviations use degrees. Fits apply to linear dimensions and are entered explicitly: the app does not infer a fit from STEP geometry or calculate its limit deviations. The measured nominal value stays tied to the geometry. Applied tolerance edits support undo/redo, project saving and PDF export.
 
 Expand **Position and notes** in the selected-dimension panel to set its paper offset, prefix or note after the value.
 
-Unapplied tolerance entries stay in the panel while you zoom, pan, switch between Select and Pan, or drag the same selected dimension.
+Unapplied tolerance entries are retained per dimension while you zoom, pan, change inspector tabs or theme, select parts for export, or edit another dimension and return. Switching tolerance modes preserves values already entered in the other modes. Drafts are kept for the current session; Apply commits them to the drawing and saved project.
 
 Tool shortcuts work when focus is outside text fields. Use the arrow keys or Home/End to move between tolerance modes, then enter the required values and apply them.
 

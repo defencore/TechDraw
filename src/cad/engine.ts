@@ -8,7 +8,7 @@ import type {
   Projection,
   ViewId,
 } from '../model';
-import { readStepProducts, type StepProduct } from './step-metadata';
+import { readStepProducts, stepPartDisplayName, type StepProduct } from './step-metadata';
 import type { BRepAdaptor_Curve, TopAbs_ShapeEnum, TopoDS_Shape } from 'replicad-opencascadejs';
 
 export type CadProgress = (message: string) => void;
@@ -675,7 +675,6 @@ export async function importStep(
     } finally {
       stepModel.delete();
     }
-    const base = sourceName.replace(/\.(step|stp)$/i, '');
     const results: Part[] = [];
     try {
       let unmatched = 0,
@@ -688,7 +687,7 @@ export async function importStep(
       const occurrence = new Map<number, number>();
       for (let i = 0; i < parts.length; i++) {
         const match = matches[i];
-        let name = match?.product.name || (parts.length === 1 ? base : `Solid ${i + 1}`);
+        let name = stepPartDisplayName(match?.product.name, sourceName, parts.length, i);
         let productPath = match?.product.paths[0] || [name];
         if (match && match.product.paths.length > 1) {
           const shared: string[] = [];
@@ -698,6 +697,7 @@ export async function importStep(
           }
           productPath = [...shared, match.product.name];
         }
+        if (match && name !== match.product.name) productPath = [...productPath.slice(0, -1), name];
         if (
           match &&
           matches.filter((other) => other?.product.definitionId === match.product.definitionId)

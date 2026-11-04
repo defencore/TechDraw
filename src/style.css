@@ -450,6 +450,98 @@ button:hover:not(:disabled) {
   flex: 1;
   min-width: 0;
 }
+#workspace-feedback {
+  flex-shrink: 0;
+}
+.drawing-feedback {
+  --feedback-ink: var(--ink);
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin: 0 16px 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-subtle);
+  color: var(--feedback-ink);
+  font-size: 10px;
+  line-height: 1.5;
+}
+.drawing-feedback-overflow {
+  --feedback-ink: #835716;
+  border-color: color-mix(in srgb, var(--feedback-ink) 24%, var(--border));
+  background: color-mix(in srgb, #ce9c37 7%, var(--surface));
+}
+:root[data-theme='dark'] .drawing-feedback-overflow {
+  --feedback-ink: #e6be7e;
+}
+.drawing-feedback-content {
+  flex: 1;
+  min-width: 0;
+}
+.drawing-feedback-message {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  overflow-wrap: anywhere;
+}
+.drawing-feedback-message .icon {
+  width: 14px;
+  height: 14px;
+  margin-top: 1px;
+}
+.drawing-feedback-actions {
+  display: flex;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+  gap: 5px;
+}
+.drawing-feedback-action {
+  min-height: 27px;
+  padding: 4px 7px;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 10px;
+  font-weight: 550;
+}
+.drawing-feedback-action .icon {
+  width: 12px;
+  height: 12px;
+}
+.drawing-feedback-details {
+  margin: 3px 0 0 21px;
+}
+.drawing-feedback-details summary {
+  width: max-content;
+  cursor: pointer;
+  color: var(--muted);
+}
+.drawing-feedback-details ul {
+  max-height: 120px;
+  overflow: auto;
+  margin: 6px 0 0;
+  padding: 0 0 0 15px;
+  overflow-wrap: anywhere;
+}
+.drawing-feedback-details li + li {
+  margin-top: 4px;
+}
+@container (max-width: 540px) {
+  .drawing-feedback {
+    flex-wrap: wrap;
+    gap: 7px;
+    margin: 0 12px 9px;
+  }
+  .drawing-feedback-content {
+    flex-basis: 100%;
+  }
+  .drawing-feedback-actions {
+    margin-left: 21px;
+  }
+}
 .eyebrow {
   font-size: 9px;
   font-weight: 600;
@@ -1388,6 +1480,10 @@ h1 {
   background: var(--accent-soft);
   color: var(--accent);
 }
+.dimension-row > span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .dimension-row small {
   display: block;
   margin-top: 4px;
@@ -1395,6 +1491,7 @@ h1 {
   font-size: 9px;
 }
 .dimension-origin {
+  flex-shrink: 0;
   font-size: 8px;
   border: 1px solid var(--border);
   border-radius: 3px;
@@ -1858,6 +1955,7 @@ h1 {
   .files-panel,
   .inspector,
   .workspace-heading,
+  #workspace-feedback,
   .workspace-dock,
   .viewport-dock,
   .canvas-status,
