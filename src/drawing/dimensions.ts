@@ -5,6 +5,7 @@ import {
   formatDimensionLabel,
 } from './dimension-label';
 import { dimensionGeometry } from './dimension-geometry';
+import { effectivePartType } from '../manufacturing/catalog';
 import {
   gearDatumPaperGeometry,
   gearDrawingOrientation,
@@ -171,7 +172,7 @@ export function arrangeDimensions(
     b: [...d.b] as Point2,
     ...(d.vertex ? { vertex: [...d.vertex] as Point2 } : {}),
   }));
-  if (options.part?.features?.gear) {
+  if (options.part?.features?.gear && effectivePartType(options.part) === 'gear') {
     let lane = 0;
     for (const dimension of result)
       if (!dimension.locked && dimension.automatic && dimension.kind === 'angle')
@@ -556,7 +557,7 @@ function shaftFeatures(part: Part):
 }
 
 export function autoDimensionWarnings(part: Part, dimensions?: Dimension[]): string[] {
-  if (part.features?.gear)
+  if (part.features?.gear && effectivePartType(part) === 'gear')
     return gearDrawingOrientation(part)
       ? []
       : [
@@ -626,7 +627,8 @@ export function autoDimensionWarnings(part: Part, dimensions?: Dimension[]): str
 
 /** Suggest geometric dimensions only. STEP geometry cannot supply manufacturing intent. */
 export function autoDimensions(part: Part, detail: 'balanced' | 'full' = 'balanced'): Dimension[] {
-  if (part.features?.gear) return arrangeDimensions(measuredGearDimensions(part), { part });
+  if (part.features?.gear && effectivePartType(part) === 'gear')
+    return arrangeDimensions(measuredGearDimensions(part), { part });
   const dimensions: Dimension[] = [];
   let serial = 0;
   const push = (

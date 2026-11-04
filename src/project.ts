@@ -2,6 +2,7 @@ import { titleBlockDefaults, titleBlockKeys } from './drawing/title-block-data';
 import { parseDimensionTolerance } from './drawing/tolerances';
 import { annotationColor } from './drawing/annotation-style';
 import { parseGearGeometry, parseGearSpecification } from './gears/specification';
+import { parseManufacturingData } from './manufacturing/catalog';
 import type {
   Bounds2,
   Dimension,
@@ -231,6 +232,13 @@ function part(value: unknown, budget: Budget): Part {
       result.gearSpecification = parseGearSpecification(p.gearSpecification);
     } catch (error) {
       return invalid(error instanceof Error ? error.message : 'invalid gear specification.');
+    }
+  }
+  if (p.manufacturing !== undefined) {
+    try {
+      result.manufacturing = parseManufacturingData(p.manufacturing);
+    } catch (error) {
+      return invalid(error instanceof Error ? error.message : 'invalid manufacturing data.');
     }
   }
   if (p.features !== undefined) {

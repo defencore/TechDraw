@@ -4,6 +4,7 @@ import type {
   DrawingLayout,
   DrawingSettings,
   GearSpecification,
+  ManufacturingData,
   Part,
 } from './model';
 import { titleBlockDefaults } from './drawing/title-block-data';
@@ -36,9 +37,10 @@ export interface DimensionSnapshot {
   layout?: DrawingLayout;
   instructions?: string;
   gearSpecification?: GearSpecification | null;
+  manufacturing?: ManufacturingData | null;
 }
 
-/** Dimensions, review annotations and sheet layout form one reversible editing operation. */
+/** Drawing annotations, manufacturing data and layout form one reversible editing operation. */
 export class DimensionHistory {
   private past: DimensionSnapshot[] = [];
   private future: DimensionSnapshot[] = [];

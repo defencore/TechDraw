@@ -1,6 +1,19 @@
-import type { Dimension, DrawingAnnotation, DrawingLayout, GearSpecification, Part } from './model';
+import type {
+  Dimension,
+  DrawingAnnotation,
+  DrawingLayout,
+  GearSpecification,
+  ManufacturingData,
+  Part,
+} from './model';
 import { parseGearSpecification } from './gears/specification';
+import {
+  effectivePartType,
+  hasManufacturingData,
+  parseManufacturingData,
+} from './manufacturing/catalog';
 import { autoDimensions } from './drawing/dimensions';
+import { mergeDimensionSuggestions } from './drawing/suggestions';
 import { initializeDrawing } from './drawing/layout';
 import { parsePartInstructions, type ProjectData } from './project';
 import { drawingSettingsForInstructions } from './drawing/manufacturing-instructions';
@@ -64,9 +77,9 @@ export class WorkspaceDocument {
     const { format, orientation, template, scale } = this.state.settings;
     return JSON.stringify([format, orientation, template, scale]);
   }
-  private arrangeGeneratedGear(part: Part): void {
+  private arrangeGeneratedDrawing(part: Part): void {
     if (
-      (part.features?.gear || part.gearSpecification) &&
+      hasManufacturingData(part) &&
       !this.partHasLocks(part.id) &&
       !this.state.annotations[part.id]?.length &&
       (this.state.dimensions[part.id] ?? []).every((dimension) => dimension.automatic)
@@ -80,7 +93,7 @@ export class WorkspaceDocument {
       if (!this.hasLocks) {
         this.state.layouts = {};
         for (const history of this.histories.values()) history.invalidateLayouts();
-        for (const part of this.state.parts) this.arrangeGeneratedGear(part);
+        for (const part of this.state.parts) this.arrangeGeneratedDrawing(part);
       }
       this.layoutSettingsKey = key;
     }
@@ -119,6 +132,7 @@ export class WorkspaceDocument {
       layout: this.state.layouts[id],
       instructions: this.getInstructions(id),
       gearSpecification: this.state.parts.find((part) => part.id === id)?.gearSpecification ?? null,
+      manufacturing: this.state.parts.find((part) => part.id === id)?.manufacturing ?? null,
     });
   }
 
@@ -130,7 +144,7 @@ export class WorkspaceDocument {
     this.checkpointFor(partId);
     this.state.instructions[partId] = validated;
     if (!this.partHasLocks(partId)) delete this.state.layouts[partId];
-    this.arrangeGeneratedGear(part);
+    this.arrangeGeneratedDrawing(part);
     return true;
   }
 
@@ -144,7 +158,40 @@ export class WorkspaceDocument {
     if (validated) part.gearSpecification = validated;
     else delete part.gearSpecification;
     if (!this.partHasLocks(partId)) delete this.state.layouts[partId];
-    this.arrangeGeneratedGear(part);
+    this.arrangeGeneratedDrawing(part);
+    return true;
+  }
+
+  /** Switching the active profile retains saved values belonging to every other profile. */
+  setManufacturing(partId: string, data?: ManufacturingData): boolean {
+    const part = this.state.parts.find((item) => item.id === partId);
+    if (!part) return false;
+    let validated = data === undefined ? undefined : parseManufacturingData(data);
+    if (validated)
+      validated = parseManufacturingData({
+        ...validated,
+        profiles: { ...part.manufacturing?.profiles, ...validated.profiles },
+      });
+    if (JSON.stringify(validated) === JSON.stringify(part.manufacturing)) return false;
+    const oldType = effectivePartType(part);
+    this.checkpointFor(partId);
+    if (validated) part.manufacturing = validated;
+    else delete part.manufacturing;
+    const unlocked = !this.partHasLocks(partId);
+    if (unlocked) delete this.state.layouts[partId];
+    if (
+      oldType !== effectivePartType(part) &&
+      unlocked &&
+      !this.state.annotations[partId]?.length &&
+      (this.state.dimensions[partId] ?? []).every((dimension) => dimension.automatic)
+    ) {
+      this.state.dimensions[partId] = mergeDimensionSuggestions(
+        this.state.dimensions[partId] ?? [],
+        autoDimensions(part),
+      ).dimensions;
+      this.pendingArrangement.add(partId);
+    }
+    this.arrangeGeneratedDrawing(part);
     return true;
   }
 
@@ -214,6 +261,7 @@ export class WorkspaceDocument {
       layout: this.state.layouts[id],
       instructions: this.getInstructions(id),
       gearSpecification: this.active?.gearSpecification ?? null,
+      manufacturing: this.active?.manufacturing ?? null,
     };
     const result = this.history?.[direction](current);
     if (!result) return false;
@@ -224,6 +272,10 @@ export class WorkspaceDocument {
     if (result.gearSpecification !== undefined && this.active) {
       if (result.gearSpecification) this.active.gearSpecification = result.gearSpecification;
       else delete this.active.gearSpecification;
+    }
+    if (result.manufacturing !== undefined && this.active) {
+      if (result.manufacturing) this.active.manufacturing = result.manufacturing;
+      else delete this.active.manufacturing;
     }
     if (result.layout) this.state.layouts[id] = result.layout;
     else delete this.state.layouts[id];

@@ -1,0 +1,206 @@
+.part-type-editor {
+  display: grid;
+  gap: 15px;
+}
+.inspector-tabs:has([data-action='tab:manufacturing']) button:nth-child(n + 4) {
+  grid-column: span 2;
+}
+.part-type-heading {
+  margin: 0;
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1.5;
+}
+.part-type-editor > .field,
+.part-type-editor > .field-help {
+  margin: 0;
+}
+.part-type-editor select,
+.part-type-editor input,
+.part-type-editor textarea {
+  min-height: 38px;
+}
+.part-type-editor .part-type-selection-help {
+  padding: 10px 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-subtle);
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.7;
+}
+.manufacturing-profile-fields {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.manufacturing-profile-fields > .section-label {
+  margin: 3px 0 14px;
+}
+.manufacturing-universal-heading {
+  margin: 17px 0 11px;
+}
+.manufacturing-universal-heading > strong {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 650;
+}
+.manufacturing-universal-heading > .field-help {
+  margin: 6px 0 0;
+}
+.manufacturing-universal-group {
+  margin: 9px 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.manufacturing-universal-group > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 11px;
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.manufacturing-universal-group > summary::after {
+  content: '+';
+  color: var(--muted);
+  font-size: 15px;
+  font-weight: 400;
+}
+.manufacturing-universal-group[open] > summary::after {
+  content: '−';
+}
+.manufacturing-universal-body {
+  min-width: 0;
+  padding: 0 11px;
+}
+.manufacturing-filled-indicator {
+  display: inline-flex;
+  margin-left: auto;
+  color: var(--accent);
+}
+.manufacturing-filled-indicator .icon {
+  width: 13px;
+  height: 13px;
+}
+.manufacturing-parameters {
+  margin: 16px 0;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+}
+.manufacturing-parameters > summary {
+  padding: 11px;
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.manufacturing-parameters-body {
+  display: grid;
+  gap: 11px;
+  padding: 0 11px 11px;
+}
+.manufacturing-parameters-body > .field-help {
+  margin: 0;
+}
+.manufacturing-parameter-row {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-subtle);
+}
+.manufacturing-parameter-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 7px;
+  margin-bottom: 9px;
+}
+.manufacturing-parameter-heading strong {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+}
+.manufacturing-parameter-heading button {
+  width: 32px;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  background: var(--surface);
+}
+.manufacturing-parameter-heading button .icon {
+  width: 14px;
+  height: 14px;
+}
+.manufacturing-parameter-row .field {
+  margin-bottom: 11px;
+}
+.manufacturing-parameter-values {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 8px;
+}
+.manufacturing-parameter-values .field {
+  margin: 0;
+}
+.manufacturing-parameter-row input {
+  background: var(--surface);
+}
+.manufacturing-profile-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 15px;
+}
+.manufacturing-profile-actions button,
+.manufacturing-parameters-body > button {
+  min-height: 38px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-subtle);
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 550;
+}
+.manufacturing-parameters-body > button {
+  justify-self: start;
+}
+.manufacturing-profile-actions [data-profile-action='apply'] {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--surface);
+}
+.manufacturing-profile-fields:disabled input,
+.manufacturing-profile-fields:disabled textarea,
+.manufacturing-profile-fields:disabled button {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+@media (pointer: coarse) {
+  .part-type-editor select,
+  .part-type-editor input,
+  .part-type-editor textarea,
+  .manufacturing-profile-actions button,
+  .manufacturing-parameters-body > button,
+  .manufacturing-parameter-heading button {
+    min-height: 44px;
+  }
+  .part-type-editor select,
+  .part-type-editor input,
+  .part-type-editor textarea {
+    font-size: 16px;
+  }
+  .manufacturing-parameter-heading button {
+    min-width: 44px;
+  }
+}

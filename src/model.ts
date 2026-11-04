@@ -56,6 +56,36 @@ export interface GearSpecification {
   heatTreatment?: string;
   toothEdge?: string;
 }
+export type PartType =
+  | 'auto'
+  | 'general'
+  | 'shaft'
+  | 'bushing'
+  | 'plate'
+  | 'flange'
+  | 'gear'
+  | 'custom'
+  | 'nut'
+  | 'screw'
+  | 'linear-nut'
+  | 'bearing'
+  | 'frame';
+export type ManufacturingProfileType = Exclude<PartType, 'auto'>;
+export interface ManufacturingParameter {
+  id: string;
+  label: string;
+  symbol?: string;
+  value: string;
+}
+export interface ManufacturingProfile {
+  fields: Record<string, string>;
+  customName?: string;
+  parameters: ManufacturingParameter[];
+}
+export interface ManufacturingData {
+  type: PartType;
+  profiles: Partial<Record<ManufacturingProfileType, ManufacturingProfile>>;
+}
 export interface Part {
   id: string;
   name: string;
@@ -69,6 +99,7 @@ export interface Part {
   views: Projection[];
   warnings: string[];
   gearSpecification?: GearSpecification;
+  manufacturing?: ManufacturingData;
   features?: {
     gear?: GearGeometry;
     circles: {

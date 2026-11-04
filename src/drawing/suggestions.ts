@@ -97,6 +97,8 @@ export function mergeDimensionSuggestions(
     const next = structuredClone(suggestion);
     if (old) {
       next.id = old.id;
+      if (old.minimumPrecision !== undefined || next.minimumPrecision !== undefined)
+        next.minimumPrecision = Math.max(old.minimumPrecision ?? 0, next.minimumPrecision ?? 0);
       if (old.tolerance) next.tolerance = structuredClone(old.tolerance);
       if (old.prefix !== undefined) next.prefix = old.prefix;
       if (old.suffix !== undefined) next.suffix = old.suffix;

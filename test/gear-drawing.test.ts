@@ -7,7 +7,8 @@ import {
   projectGearPoint,
   gearReferenceCircles,
 } from '../src/drawing/gear-dimensions';
-import { gearTableLayout, renderGearTable } from '../src/drawing/gear-table';
+import { gearTableLayout } from '../src/drawing/gear-table';
+import { renderParameterTable } from '../src/drawing/parameter-table';
 import { initializeDrawing } from '../src/drawing/layout';
 import { drawingLayoutFits, drawingPage, projectionMetrics } from '../src/drawing/page-layout';
 import { renderDrawing } from '../src/drawing/render';
@@ -119,12 +120,13 @@ test('unapproved gear names never supply module, pressure angle, shift or a pitc
   const part = gearPart();
   part.name = '35-tooth module 2 gear';
   const page = drawingPage(defaultSettings, part),
-    table = page.gearTable!;
+    table = page.parameterTable!;
   assert.equal(table.rows[0].label.join(' '), 'BASIC GEAR DATA — DRAFT');
   assert.equal(
-    drawingPage({ ...defaultSettings, template: 'eskd-uk' }, part).gearTable!.rows[0].label.join(
-      ' ',
-    ),
+    drawingPage(
+      { ...defaultSettings, template: 'eskd-uk' },
+      part,
+    ).parameterTable!.rows[0].label.join(' '),
     'ОСНОВНІ ДАНІ — ЧЕРНЕТКА',
   );
   for (const key of ['module', 'pressure-angle', 'profile-shift', 'reference-diameter'])
@@ -146,7 +148,7 @@ test('a confirmed specification supplies reference geometry without replacing th
   const part = gearPart();
   part.gearSpecification = specification;
   assert.equal(
-    drawingPage(defaultSettings, part).gearTable!.rows[0].label.join(' '),
+    drawingPage(defaultSettings, part).parameterTable!.rows[0].label.join(' '),
     'BASIC GEAR DATA',
   );
   const source = structuredClone(part);
@@ -177,7 +179,7 @@ test('a confirmed specification supplies reference geometry without replacing th
 test('gear table and notes reserve separate physical regions and frozen drawing positions are never moved', () => {
   const part = gearPart(),
     page = drawingPage(defaultSettings, part),
-    table = page.gearTable!;
+    table = page.parameterTable!;
   assert.equal(table.bounds.maxX - table.bounds.minX, 110);
   assert.equal(page.content.maxX + 8, table.bounds.minX);
   assert.ok(table.bounds.maxY < page.notes.contentBottom);
@@ -192,7 +194,7 @@ test('gear table and notes reserve separate physical regions and frozen drawing 
 test('tooth-count conflicts remain printed and suppress calculated pitch references', () => {
   const part = gearPart();
   part.gearSpecification = { ...specification, teeth: 36 };
-  const table = drawingPage(defaultSettings, part).gearTable!;
+  const table = drawingPage(defaultSettings, part).parameterTable!;
   assert.equal(table.rows[0].label.join(' '), 'BASIC GEAR DATA — DRAFT');
   assert.deepEqual(table.rows.find((row) => row.key === 'teeth')?.value, ['36']);
   assert.deepEqual(table.rows.find((row) => row.key === 'measured-teeth')?.value, ['35']);
@@ -213,8 +215,8 @@ test('table wrapping discloses overflow, escapes text and localizes all drawing 
     orientation: 'portrait' as const,
     template: 'eskd-uk' as const,
   };
-  const table = drawingPage(settings, part).gearTable!,
-    markup = renderGearTable(table);
+  const table = drawingPage(settings, part).parameterTable!,
+    markup = renderParameterTable(table);
   assert.ok(table.warnings.some((warning) => warning.startsWith('Gear parameter table exceeds')));
   assert.ok(markup.includes('КОНТРОЛЬНІ ДАНІ'));
   assert.ok(markup.includes('ДОВІДКОВІ ДАНІ'));
@@ -286,7 +288,7 @@ test('a measured tooth datum locates the radial pin axis and its true angle with
   assert.ok(rendered.svg.includes('data-gear-row="tooth-datum"'));
   assert.deepEqual(
     drawingPage(defaultSettings, part)
-      .gearTable!.rows.find((row) => row.key === 'tooth-datum')!
+      .parameterTable!.rows.find((row) => row.key === 'tooth-datum')!
       .value.join(' '),
     'Selected tooth-tip center',
   );

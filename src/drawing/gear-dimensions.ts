@@ -1,5 +1,6 @@
 import type { Bounds2, Dimension, Part, Point2, Point3, Projection, ViewId } from '../model';
 import { gearReferenceDiameter } from '../gears/specification';
+import { effectivePartType } from '../manufacturing/catalog';
 import { toPaper, type ViewTransform } from './dimension-geometry';
 
 export function projectGearPoint(point: Point3, view: ViewId): Point2 {
@@ -19,6 +20,7 @@ export function gearDrawingOrientation(part: Part):
       horizontal: boolean;
     }
   | undefined {
+  if (effectivePartType(part) !== 'gear') return;
   const gear = part.features?.gear;
   if (!gear) return;
   const axis = gear.axis.direction.findIndex((value) => Math.abs(value) > 0.999999);

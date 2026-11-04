@@ -12,8 +12,9 @@ import { dimensionGeometry, type ViewTransform } from './dimension-geometry';
 import { measureDimensionText } from './dimension-label';
 import { isGostTemplate } from './gost-form1';
 import { sheetNotes, type SheetNotes } from './sheet-notes';
-import { gearTableLayout, type GearTableLayout } from './gear-table';
+import { parameterTableLayout, type ParameterTableLayout } from './parameter-table';
 import { gearDatumPaperGeometry, gearReferenceCircles } from './gear-dimensions';
+import { effectivePartType } from '../manufacturing/catalog';
 
 /** GOST 2.302-68 clause 2, ordered from the largest to the smallest part-drawing scale. */
 export const STANDARD_DRAWING_SCALES = [
@@ -48,7 +49,8 @@ export const STANDARD_DRAWING_SCALES = [
 
 /** Automatic gear fitting retains a readable tooth envelope; explicit scales remain unrestricted. */
 export function automaticDrawingScales(part: Part): readonly number[] {
-  const diameter = part.features?.gear?.outsideDiameter;
+  const diameter =
+    effectivePartType(part) === 'gear' ? part.features?.gear?.outsideDiameter : undefined;
   if (!diameter) return STANDARD_DRAWING_SCALES;
   const readable = STANDARD_DRAWING_SCALES.filter((scale) => diameter * scale >= 10 - 1e-9);
   return readable.length ? readable : [STANDARD_DRAWING_SCALES[0]];
@@ -64,7 +66,7 @@ export interface DrawingPage {
   content: Bounds2;
   fittingArea: Bounds2;
   notes: SheetNotes;
-  gearTable?: GearTableLayout;
+  parameterTable?: ParameterTableLayout;
 }
 export interface ProjectionMetrics {
   model: Bounds2;
@@ -104,17 +106,18 @@ export function drawingPage(settings: DrawingSettings, part?: Part): DrawingPage
     maxX: width - right - 1 - designationReserve,
     maxY: notes.contentBottom,
   };
-  const gearTable = part
-    ? gearTableLayout(part, settings, {
+  const parameterTable = part
+    ? parameterTableLayout(part, settings, {
         ...content,
         minY: top + (gost ? 20 : 10),
       })
     : undefined;
-  if (gearTable) {
+  if (parameterTable) {
     // A narrow portrait sheet cannot hold fixed-size annotation text in a slim side column.
     // Keep its table in the upper right and use the full-width area below it instead.
-    if (gearTable.bounds.minX - 8 - content.minX < 100) content.minY = gearTable.bounds.maxY + 8;
-    else content.maxX = gearTable.bounds.minX - 8;
+    if (parameterTable.bounds.minX - 8 - content.minX < 100)
+      content.minY = parameterTable.bounds.maxY + 8;
+    else content.maxX = parameterTable.bounds.minX - 8;
   }
   return {
     width,
@@ -125,7 +128,7 @@ export function drawingPage(settings: DrawingSettings, part?: Part): DrawingPage
     bottom,
     blockHeight,
     notes,
-    gearTable,
+    parameterTable,
     content,
     fittingArea: {
       minX: left + 5,
@@ -199,7 +202,7 @@ export function projectionMetrics(
       : view.name.toUpperCase();
   const captionOrigin: Point2 = [
     (model.minX + model.maxX) / 2,
-    (part?.features?.gear ? occupied.minY : model.minY) - 5,
+    (part?.features?.gear && effectivePartType(part) === 'gear' ? occupied.minY : model.minY) - 5,
   ];
   const captionWidth =
     measureDimensionText(captionText, 2.5) +

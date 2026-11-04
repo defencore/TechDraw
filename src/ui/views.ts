@@ -25,7 +25,7 @@ interface ViewContext {
   collapsedBranches: Set<string>;
   annotationPanel?: string;
   instructionsPanel?: string;
-  gearPanel?: string;
+  manufacturingPanel?: string;
   hasLockedItems?: boolean;
 }
 
@@ -40,7 +40,7 @@ export function createWorkspaceViews({
   collapsedBranches,
   annotationPanel,
   instructionsPanel,
-  gearPanel,
+  manufacturingPanel,
   hasLockedItems = false,
 }: ViewContext) {
   const active = () => state.parts.find((p) => p.id === state.activeId);
@@ -106,7 +106,7 @@ export function createWorkspaceViews({
       return `${renderTitleBlockEditor(s, part?.name)}${part?.sourceNotes?.length ? `<details class="source-notes"><summary>DXF source notes</summary><p class="field-help">DXF notes are reference text from the source file, not measured geometry.</p>${part.sourceNotes.map((note) => `<p data-user-content>${e(note)}</p>`).join('')}</details>` : ''}${part?.warnings.length ? `<div class="geometry-note"><strong>Import notes</strong>${part.warnings.map((w) => `<p>${e(w)}</p>`).join('')}</div>` : ''}`;
     if (inspectorTab === 'annotations') return annotationPanel ?? '';
     if (inspectorTab === 'instructions') return instructionsPanel ?? '';
-    if (inspectorTab === 'gear') return gearPanel ?? '';
+    if (inspectorTab === 'manufacturing') return manufacturingPanel ?? '';
     const selectedCount = dims().filter((item) => selectedDimensionIds.has(item.id)).length;
     const lockedCount = dims().filter(
       (item) => selectedDimensionIds.has(item.id) && item.locked,

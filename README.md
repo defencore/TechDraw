@@ -27,6 +27,7 @@ The Open CASCADE WebAssembly kernel imports STEP geometry and computes precise h
 - Export a vector PDF with one page per selected part and the same layout as the preview.
 - Add colored paper-space review text, arrows, rectangles, ellipses and freehand marks, with undo/redo and inline editing.
 - Write manufacturing instructions for each part and print numbered steps beside or above its title block.
+- Choose a per-part manufacturing profile for shafts, bushings, nuts, screws, linear-drive nuts, bearings, plates, flanges, gears, frames or a custom type, with reusable requirement sections and additional named parameters.
 - Prepare drawings for every imported part, then export one multipage PDF or save one project ZIP with shared originals.
 - Save and reopen `.techdraw.zip` archives containing editable drawing data, original STEP/DXF files and a project description. Validated `.techdraw.json` projects can still be opened.
 - Copy, save or share a PNG of the visible area, selected items, whole sheet or a captured region, including dimensions and review marks.
@@ -44,7 +45,7 @@ Automatic dimensions are geometric suggestions. The app does not import semantic
 5. Use **Markup** for review text or graphics. Open **Instructions** to write manufacturing steps for the active part, then choose **Apply instructions** to preview them on its drawing. **Project description** in the parts panel holds separate project handover text.
 6. For an assembly or several files, choose **Drawings for all parts** to select every part and prepare its sheet. Choose **Export** for a multipage PDF, or **Copy image** for a PNG preview of the active drawing. Use **Save** (`Ctrl/⌘+S`) to download the complete local project archive; **Open project** restores it. SVG export uses the active part.
 
-The inspector tabs are **Dimensions**, **Markup**, **Instructions**, **Gear**, **Sheet** and **Title block**.
+The inspector tabs are **Dimensions**, **Markup**, **Instructions**, **Part type**, **Sheet** and **Title block**.
 
 ## Manufacturing instructions and drawing sets
 
@@ -56,15 +57,27 @@ Instruction text changes the space available for views. An unlocked part receive
 
 **Drawings for all parts** prepares a sheet for every imported element and selects every part for export. It does not start a download. **Export** then creates one PDF page per selected part; **Save** keeps all parts, their dimensions, markup, instructions and layouts in one ZIP. Placed components from the same STEP file share one archived original rather than duplicating it for each drawing.
 
+## Part types and manufacturing parameters
+
+Open **Part type** and choose **Automatic**, **General part** or a preset: **Shaft / axle**, **Bushing / spacer**, **Nut**, **Screw / lead screw**, **Ball-screw / lead-screw nut**, **Bearing**, **Plate / cover**, **Flange**, **Gear**, **Frame / bulkhead** or **Custom type**. Automatic uses existing gear geometry or specifications where available and otherwise selects General part. An explicit choice controls the requirements shown on that part's drawing.
+
+Presets provide convenient starting fields for shafts, bushings, nuts, screws, ball-screw/lead-screw nuts, bearings, plates, flanges, gears and frames. Every type also offers six reusable sections: **Holes and axes**, **Threads**, **Fits and geometric requirements**, **Linear drives**, **Bearings and seats**, and **Material and process**. A frame can therefore include bearing-seat requirements or angled holes without changing its type. Only sections containing entered data are printed; preset fields appear once even when they also belong to a reusable section.
+
+**Additional parameters → Add parameter** adds rows with a name, optional symbol and requirement value. Non-Gear profiles accept an optional profile name, such as **Standoff** or **Extension** for the bushing preset; Custom type accepts a custom type name. Gear's reusable sections are **Additional gear requirements**, printed after its specialized parameter table. These entries describe supplied manufacturing intent; they do not replace measured CAD dimensions, recognize arbitrary features or determine tolerances automatically.
+
+Changing the type takes effect immediately and retains the other profiles' saved values and the separate gear specification. Type changes can refresh unqualified automatic suggestions when the drawing has no manual dimensions, locks or review marks; explicit tolerances and notes are preserved. Entered requirement text remains a draft until **Apply part requirements** or a save/export action while that profile is active. **Reset draft** restores committed values. Inactive unapplied drafts stay in the current session; apply them before saving to retain them in the project. The selected profile, applied inactive profile values and additional rows are saved per part in JSON/ZIP and participate in Undo/Redo. Locked drawing positions remain fixed when requirements change; review layout warnings before export.
+
+Only the active profile is printed. General part has no parameter table until requirements are entered. Other empty profiles show a draft table with a request to specify manufacturing requirements; Gear retains its specialized draft table and adds supplemental requirements only when entered. Long combined tables produce an overflow warning and must fit before PDF export. Shared material/title-block data and the per-part Instructions tab remain independent.
+
 ## Gear drawings
 
-Open **Gear** to review detected geometry and enter the manufacturing specification for the active part. For supported straight cylindrical profiles, the CAD kernel measures a repeated tooth count, tip/root diameters, face width, overall length and available hub, through-bore and radial-hole features. Gear-specific suggestions describe these features rather than dimensioning individual teeth. A tooth datum uses the midpoint of an actual modeled tip arc; radial-hole orientation still needs an engineering tolerance and inspection requirement.
+Choose **Part type → Gear** to review detected geometry and enter the manufacturing specification for the active part. For supported straight cylindrical profiles, the CAD kernel measures a repeated tooth count, tip/root diameters, face width, overall length and available hub, through-bore and radial-hole features. Gear-specific suggestions describe these features rather than dimensioning individual teeth. A tooth datum uses the midpoint of an actual modeled tip arc; radial-hole orientation still needs an engineering tolerance and inspection requirement.
 
 Gear dimensions retain enough decimal places for the measured nominal value: a bore of **Ø3.175** stays Ø3.175 even when the sheet is set to two decimal places. Display precision does not specify a tolerance.
 
 Measured geometry does not establish the gear's module, pressure angle, profile shift, accuracy or tooth profile standard. Source-name text is shown separately as an unverified hint. Supply the external spur/helical type, normal module, normal pressure angle, profile shift, profile reference, accuracy/backlash, inspection dimensions and limits, flank finish and tooth-edge treatment. Helical specifications also require helix angle and hand. Material remains in **Title block**; heat treatment and hardness have a separate gear field. No 20° pressure angle or zero profile shift is assumed.
 
-Choose **Apply gear data** to update the drawing, or **Reset draft** to discard pending changes. Save/export actions validate and include pending gear data from every part. Applied values, detected evidence and the resulting layout survive Undo/Redo and JSON/ZIP reopening. Generated gear dimensions are arranged again for a changed sheet, gear table or instruction footprint when the drawing has only automatic dimensions and no review marks. Authored dimensions and locked positions are retained; review fit warnings before export.
+Choose **Apply gear data** to update the drawing, or **Reset draft** to discard pending changes. Save/export actions validate and include pending gear data from parts whose active profile is Gear. Applied values, detected evidence and the resulting layout survive Undo/Redo and JSON/ZIP reopening. Generated gear dimensions are arranged again for a changed sheet, gear table or instruction footprint when the drawing has only automatic dimensions and no review marks. Authored dimensions and locked positions are retained; review fit warnings before export.
 
 The printed parameter table groups basic, inspection and reference data using [GOST 2.403-75](https://files.stroyinf.ru/Data/29/2907.pdf). Reference diameter uses supplied normal-system data: `d = mn × z` for spur gears and `d = mn × z / cos β` for helical gears, as described in [KHK's basic gear guide](https://khkgears.us/media/fqrlut1m/abcs-of-gearing-b.pdf). Missing information remains marked **Specify**, and incomplete or conflicting data prints a **DRAFT** heading. The table, detected dimensions and modeled tooth contour do not constitute a complete manufacturing approval or certify compliance with the standard.
 
@@ -72,7 +85,7 @@ Automatic recognition requires 6–400 repeated circular tip/root patches with s
 
 ## Local projects and source files
 
-**Save** downloads `workspace.techdraw.zip`. It contains `project.json` with committed dimensions, tolerance text, review annotations, per-part manufacturing instructions, title-block data and fixed view layouts; original imported files under `sources/`; `manifest.json` with source associations, byte sizes and SHA-256 digests; and a readable `README.txt` containing the project description. Original source bytes are preserved without conversion. A multi-part STEP assembly shares its original file across its placed parts.
+**Save** downloads `workspace.techdraw.zip`. It contains `project.json` with committed dimensions, tolerance text, review annotations, per-part manufacturing profiles and instructions, title-block data and fixed view layouts; original imported files under `sources/`; `manifest.json` with source associations, byte sizes and SHA-256 digests; and a readable `README.txt` containing the project description. Original source bytes are preserved without conversion. A multi-part STEP assembly shares its original file across its placed parts.
 
 **Open project** accepts the ZIP archive or the supported validated JSON project format. JSON contains editable projected drawing data, but does not embed original CAD files. If an opened project has unavailable originals, a later archive records them as missing instead of reconstructing a source file from projections. Project descriptions are separate from the printed shared technical notes and per-part manufacturing instructions.
 

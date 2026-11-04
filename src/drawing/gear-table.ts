@@ -1,48 +1,26 @@
 import type { Bounds2, DrawingSettings, Part } from '../model';
 import { gearReferenceDiameter, missingGearFields } from '../gears/specification';
-import { wrapSheetNotes } from './sheet-notes';
+import { effectivePartType } from '../manufacturing/catalog';
 import { measuredPinHoleAngle } from './gear-dimensions';
-
-export interface GearTableRow {
-  key: string;
-  section: boolean;
-  label: string[];
-  symbol: string;
-  value: string[];
-  y: number;
-  height: number;
-}
-export interface GearTableLayout {
-  bounds: Bounds2;
-  rows: GearTableRow[];
-  warnings: string[];
-}
-
-const WIDTH = 110;
-const VALUE_WIDTH = 35;
-const SYMBOL_WIDTH = 13;
-const LABEL_WIDTH = WIDTH - VALUE_WIDTH - SYMBOL_WIDTH;
-const FONT_SIZE = 2.6;
-const LINE_HEIGHT = 3.8;
-const xml = (value: string) =>
-  value.replace(
-    /[&<>"']/g,
-    (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[ch]!,
-  );
-const n = (value: number) => Number(value.toFixed(5));
+import { parameterTableBuilder, type ParameterTableLayout } from './parameter-table-layout';
+import {
+  appendManufacturingRequirements,
+  enteredManufacturingRequirements,
+} from './manufacturing-table-rows';
 
 /** Three groups follow GOST 2.403; row heights expand to retain entered engineering data. */
 export function gearTableLayout(
   part: Part,
   settings: DrawingSettings,
   available: Bounds2,
-): GearTableLayout | undefined {
+): ParameterTableLayout | undefined {
+  if (effectivePartType(part) !== 'gear') return;
   const measured = part.features?.gear;
   const spec = part.gearSpecification;
-  if (!measured && !spec) return;
+  const supplemental = enteredManufacturingRequirements(part, settings);
   const missing = missingGearFields(part);
   const countMismatch = measured && spec?.teeth !== undefined && spec.teeth !== measured.toothCount;
-  const draft = missing.length > 0 || countMismatch;
+  const draft = missing.length > 0 || countMismatch || supplemental.incompleteParameters;
   const uk = settings.template === 'eskd-uk';
   const words = (en: string, ua: string) => (uk ? ua : en);
   const specify = words('Specify', 'Задати');
@@ -51,18 +29,8 @@ export function gearTableLayout(
       ? specify
       : `${Number(value.toFixed(Math.max(4, settings.precision)))}${unit}`;
   const text = (value: string | undefined) => value?.trim() || specify;
-  const rows: GearTableRow[] = [];
-  let y = available.minY;
-  const add = (key: string, label: string, symbol: string, value = '', section = false) => {
-    const labels = wrapSheetNotes(label, section ? WIDTH - 4 : LABEL_WIDTH - 4, FONT_SIZE);
-    const values = section ? [] : wrapSheetNotes(value, VALUE_WIDTH - 4, FONT_SIZE);
-    const height = Math.max(
-      section ? 6.5 : 6,
-      Math.max(labels.length, values.length) * LINE_HEIGHT + 2.2,
-    );
-    rows.push({ key, section, label: labels, symbol, value: values, y, height });
-    y += height;
-  };
+  const builder = parameterTableBuilder('gear', available);
+  const add = builder.add;
   add(
     'basic',
     draft
@@ -226,6 +194,16 @@ export function gearTableLayout(
         );
     }
   }
+  if (!supplemental.empty) {
+    add(
+      'supplemental',
+      words('ADDITIONAL MANUFACTURING REQUIREMENTS', 'ДОДАТКОВІ ВИМОГИ ДО ВИГОТОВЛЕННЯ'),
+      '',
+      '',
+      true,
+    );
+    appendManufacturingRequirements(builder, supplemental);
+  }
   const warnings: string[] = [];
   if (countMismatch)
     warnings.push(
@@ -239,50 +217,8 @@ export function gearTableLayout(
     warnings.push(
       'Radial pin-hole orientation needs a tooth datum and an inspection requirement before manufacture. The table reports its measured model-axis direction.',
     );
-  if (y > available.maxY)
-    warnings.push(
-      'Gear parameter table exceeds the drawing area. Shorten the entered data or choose a larger sheet before export.',
-    );
-  return {
-    bounds: { minX: available.maxX - WIDTH, minY: available.minY, maxX: available.maxX, maxY: y },
-    rows,
+  return builder.finish(
     warnings,
-  };
-}
-
-/** Portable SVG primitives preserve the same table in preview, SVG and vector PDF. */
-export function renderGearTable(table: GearTableLayout): string {
-  const { minX: x, minY: y, maxY } = table.bounds;
-  const path = (x1: number, y1: number, x2: number, y2: number, width: number) =>
-    `<line x1="${n(x1)}" y1="${n(y1)}" x2="${n(x2)}" y2="${n(y2)}" stroke-width="${width}"/>`;
-  const text = (value: string, tx: number, ty: number, attrs = '') =>
-    `<text x="${n(tx)}" y="${n(ty)}" stroke="none" font-size="${FONT_SIZE}" ${attrs}>${xml(value)}</text>`;
-  let svg = `<g data-gear-table="" fill="#20262b" stroke="#20262b"><rect x="${n(x)}" y="${n(y)}" width="${WIDTH}" height="${n(maxY - y)}" fill="white" stroke-width=".5"/>`;
-  for (const row of table.rows) {
-    svg += path(x, row.y, x + WIDTH, row.y, row.section ? 0.5 : 0.18);
-    if (!row.section) {
-      svg += path(x + LABEL_WIDTH, row.y, x + LABEL_WIDTH, row.y + row.height, 0.18);
-      svg += path(
-        x + WIDTH - VALUE_WIDTH,
-        row.y,
-        x + WIDTH - VALUE_WIDTH,
-        row.y + row.height,
-        0.18,
-      );
-    }
-    svg += `<g data-gear-row="${row.key}">`;
-    for (const [index, line] of row.label.entries())
-      svg += text(line, x + 2, row.y + 3.8 + index * LINE_HEIGHT);
-    if (row.symbol)
-      svg += text(
-        row.symbol,
-        x + LABEL_WIDTH + SYMBOL_WIDTH / 2,
-        row.y + 3.8,
-        'text-anchor="middle"',
-      );
-    for (const [index, line] of row.value.entries())
-      svg += text(line, x + WIDTH - VALUE_WIDTH + 2, row.y + 3.8 + index * LINE_HEIGHT);
-    svg += '</g>';
-  }
-  return `${svg}</g>`;
+    'Gear parameter table exceeds the drawing area. Shorten the entered data or choose a larger sheet before export.',
+  );
 }

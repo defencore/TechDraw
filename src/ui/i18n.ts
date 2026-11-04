@@ -121,6 +121,10 @@ function translated(text: string): string {
     [/^(\d+) dimensions selected$/, (count) => `Вибрано розмірів: ${count}`],
     [/^(\d+) selected$/, (count) => `Вибрано: ${count}`],
     [/^(\d+) locked$/, (count) => `Заблоковано: ${count}`],
+    [/^Parameter (\d+)$/, (number) => `Параметр ${number}`],
+    [/^Remove parameter (\d+)$/, (number) => `Видалити параметр ${number}`],
+    [/^Automatic currently uses (.+)\.$/, (type) => `Автоматично вибрано: ${translated(type)}.`],
+    [/^(\d+) locked$/, (count) => `Заблоковано: ${count}`],
     [/^(\d+) more messages?$/, (count) => `Ще повідомлень: ${count}`],
     [/^(\d+) commands? available\.$/, (count) => `Доступно команд: ${count}.`],
     [/^Preview: (.*)$/s, (label) => `Попередній вигляд: ${label}`],
@@ -205,6 +209,10 @@ function translated(text: string): string {
     [
       /^Invalid dimension tolerance: (.*)$/s,
       (reason) => `Некоректний допуск розміру: ${translated(reason)}`,
+    ],
+    [
+      /^Invalid manufacturing data: (.*)$/s,
+      (reason) => `Некоректні дані виготовлення: ${translated(reason)}`,
     ],
   ];
   for (const [pattern, render] of rules) {

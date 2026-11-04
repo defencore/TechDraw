@@ -200,9 +200,6 @@
   opacity: 0.5;
   cursor: not-allowed;
 }
-.inspector-tabs:has([data-action='tab:gear']) button:nth-child(n + 4) {
-  grid-column: span 2;
-}
 @media (pointer: coarse) {
   .gear-fields input,
   .gear-fields textarea,

@@ -4,11 +4,15 @@ import './ui/drawing-share.css';
 import './ui/viewer.css';
 import './ui/text-annotation-editor.css';
 import './ui/gear-editor.css';
+import './ui/part-type-editor.css';
 import { createCadClient } from './cad/client';
 import { refreshDimensionSuggestions } from './drawing/suggestions';
 import { renderDrawingFeedback } from './ui/drawing-feedback';
 import { ToleranceEditorController } from './ui/tolerance-controller';
 import { TextAnnotationEditorController } from './ui/text-annotation-controller';
+import { PartTypeEditorController } from './ui/part-type-controller';
+import { renderPartTypeEditor } from './ui/part-type-editor';
+import { effectivePartType } from './manufacturing/catalog';
 import { DimensionSelection } from './ui/dimension-selection';
 import type { GridSettings } from './ui/drawing-grid';
 import { isGridSpacing } from './drawing/grid-coordinates';
@@ -182,6 +186,13 @@ const toleranceEditor = new ToleranceEditorController({
     );
   },
   reportError: toast,
+});
+const partTypeEditor = new PartTypeEditorController({
+  active,
+  busy: () => busy,
+  commit: (partId, data) => workspaceDocument.setManufacturing(partId, data),
+  render,
+  report: toast,
 });
 
 const drawingCanvas = new DrawingCanvas({
@@ -514,7 +525,7 @@ function refreshInspector(): void {
     collapsedBranches,
     annotationPanel: renderMarkupPanel(),
     instructionsPanel: renderInstructionsPanel(),
-    gearPanel: renderGearPanel(),
+    manufacturingPanel: renderPartTypePanel(),
     hasLockedItems: hasLockedItems(),
   });
   const body = app.querySelector('.inspector-body');
@@ -573,15 +584,29 @@ function renderInstructionsPanel(): string {
     locked: Boolean(state.activeId && partHasLocks(state.activeId)),
   });
 }
-function renderGearPanel(): string {
+function renderPartTypePanel(): string {
   const part = active();
   return part
-    ? renderGearEditor(part, gearDrafts.get(part.id), !busy)
-    : '<p class="field-help">Import a part to configure gear data.</p>';
+    ? renderPartTypeEditor(
+        part,
+        partTypeEditor.draft(part),
+        !busy,
+        effectivePartType(part) === 'gear'
+          ? renderGearEditor(part, gearDrafts.get(part.id), !busy)
+          : '',
+      )
+    : '<p class="field-help">Import a part to choose its type and manufacturing parameters.</p>';
+}
+function flushManufacturingDrafts(): void {
+  const pending = partTypeEditor.preparePending(state.parts);
+  flushGearDrafts();
+  if (partTypeEditor.commitPending(pending)) render();
 }
 function flushGearDrafts(): void {
   const pending = [...gearDrafts]
-    .filter(([id]) => state.parts.some((part) => part.id === id))
+    .filter(([id]) =>
+      state.parts.some((part) => part.id === id && effectivePartType(part) === 'gear'),
+    )
     .map(([id, draft]) => [id, parseGearEditorDraft(draft)] as const);
   flushInstructionDrafts();
   let changed = false;
@@ -743,7 +768,7 @@ function render(): void {
     collapsedBranches,
     annotationPanel: renderMarkupPanel(),
     instructionsPanel: renderInstructionsPanel(),
-    gearPanel: renderGearPanel(),
+    manufacturingPanel: renderPartTypePanel(),
     hasLockedItems: hasLockedItems(),
   });
   app.innerHTML = `
@@ -773,7 +798,7 @@ function render(): void {
         </div><div class="canvas-status"><span id="tool-hint">${e(canvasHint)}</span><span>${part ? `${state.settings.format} · ${state.settings.orientation} · mm` : 'STEP / STP / DXF · Multiple files supported'}</span></div>
       </main>
       <aside class="inspector" aria-label="Drawing properties">
-        <div class="inspector-tabs" role="tablist">${['dimensions', 'annotations', 'instructions', 'gear', 'sheet', 'details'].map((tab) => `<button role="tab" aria-selected="${inspectorTab === tab}" data-action="tab:${tab}" class="${inspectorTab === tab ? 'active' : ''}">${tab === 'details' ? 'Title block' : tab === 'annotations' ? 'Markup' : tab[0].toUpperCase() + tab.slice(1)}</button>`).join('')}</div>
+        <div class="inspector-tabs" role="tablist">${['dimensions', 'annotations', 'instructions', 'manufacturing', 'sheet', 'details'].map((tab) => `<button role="tab" aria-selected="${inspectorTab === tab}" data-action="tab:${tab}" class="${inspectorTab === tab ? 'active' : ''}">${tab === 'details' ? 'Title block' : tab === 'annotations' ? 'Markup' : tab === 'manufacturing' ? 'Part type' : tab[0].toUpperCase() + tab.slice(1)}</button>`).join('')}</div>
         <div class="inspector-body">${views.renderInspector()}</div>
         <div class="review-note">${icon('info')}<p><strong>Review before manufacture</strong>Automatic dimensions are a starting point. Confirm features, tolerances, fits and sections.</p></div>
       </aside>
@@ -1051,6 +1076,11 @@ app.addEventListener('focusout', (event) => {
   if (control.dataset.dimensionSetting) dimensionInputSession = undefined;
 });
 app.addEventListener('submit', (event) => {
+  if ((event.target as HTMLElement).id === 'manufacturing-profile-form') {
+    event.preventDefault();
+    partTypeEditor.apply(app);
+    return;
+  }
   if ((event.target as HTMLElement).id === 'gear-editor-form') {
     event.preventDefault();
     applyGearDraft();
@@ -1291,6 +1321,7 @@ async function openProject(file: File): Promise<void> {
     if (token !== importToken) return;
     instructionDrafts.clear();
     gearDrafts.clear();
+    partTypeEditor.clear();
     toleranceEditor.reset();
     const savedOrientation = data.settings.orientation;
     workspaceDocument.replace(data);
@@ -1627,7 +1658,7 @@ const commandHandlers: Record<CommandId, () => void> = {
   'tab:details': () => openInspector('details'),
   'tab:dimensions': () => openInspector('dimensions'),
   'tab:instructions': () => openInspector('instructions'),
-  'tab:gear': () => openInspector('gear'),
+  'tab:manufacturing': () => openInspector('manufacturing'),
   'tab:annotations': () => openInspector('annotations'),
   theme: () => {
     theme = theme === 'light' ? 'dark' : 'light';
@@ -1711,7 +1742,7 @@ function runWorkspaceAction(action: string): void {
     ].includes(command.id)
   ) {
     try {
-      flushGearDrafts();
+      flushManufacturingDrafts();
     } catch (error) {
       toast(errorMessage(error));
       return;
@@ -1722,6 +1753,10 @@ function runWorkspaceAction(action: string): void {
 
 app.addEventListener('click', (event) => {
   const target = event.target as Element;
+  if (partTypeEditor.handleClick(app, target)) {
+    event.preventDefault();
+    return;
+  }
   if (handleGearEditorClick(app, target)) return;
   const gearAction = target.closest<HTMLElement>('[data-gear-action]')?.dataset.gearAction;
   if (gearAction) {
@@ -1849,6 +1884,7 @@ app.addEventListener('click', (event) => {
     toleranceEditor.clearPart(removeId);
     instructionDrafts.delete(removeId);
     gearDrafts.delete(removeId);
+    partTypeEditor.clearPart(removeId);
     drawingCanvas.cancel();
     workspaceDocument.removePart(removeId);
     dimensionSelection.clear();
@@ -1881,6 +1917,10 @@ app.addEventListener('click', (event) => {
 
 app.addEventListener('change', (event) => {
   const target = event.target as HTMLInputElement;
+  if (target.matches('[data-manufacturing-type]')) {
+    partTypeEditor.handleTypeChange(app, target.value);
+    return;
+  }
   if (target.dataset.gearField && state.activeId) {
     gearDrafts.set(state.activeId, captureGearEditor(app));
     if (target.dataset.gearField === 'type') syncGearEditorType(app);
@@ -2150,6 +2190,7 @@ window.addEventListener('pageshow', () => {
 });
 app.addEventListener('input', (event) => {
   const input = event.target as HTMLInputElement;
+  if (partTypeEditor.handleInput(app, input)) return;
   if (input.dataset.gearField && state.activeId) {
     gearDrafts.set(state.activeId, captureGearEditor(app));
     return;

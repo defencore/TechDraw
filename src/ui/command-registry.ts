@@ -1,4 +1,5 @@
 import type { DimensionKind } from '../model';
+import { PART_TYPES, manufacturingParameterSections } from '../manufacturing/catalog';
 import { t } from './i18n';
 
 export interface CommandContext {
@@ -474,12 +475,18 @@ export const commandDefinitions = [
     active: (context: CommandContext) => context.inspectorTab === 'instructions',
   },
   {
-    id: 'tab:gear',
-    label: 'Open gear parameters',
+    id: 'tab:manufacturing',
+    label: 'Open part type and parameters',
     group: 'Panels',
     icon: 'layers',
-    keywords: ['gear', 'teeth', 'module', 'pressure angle', 'inspection', 'manufacture'],
-    active: (context: CommandContext) => context.inspectorTab === 'gear',
+    keywords: [
+      'type',
+      'parameters',
+      'manufacture',
+      ...PART_TYPES.flatMap((type) => [type.label, type.labelUk]),
+      ...manufacturingParameterSections().flatMap((section) => [section.label, section.labelUk]),
+    ],
+    active: (context: CommandContext) => context.inspectorTab === 'manufacturing',
   },
   {
     id: 'tab:annotations',

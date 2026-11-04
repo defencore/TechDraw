@@ -160,6 +160,29 @@ class ElementNode {
   }
 }
 
+test('interpolated profile labels stay Ukrainian when the rendered DOM is localized again', () => {
+  setLanguage('uk');
+  const label = new TextNode(translate('Parameter {number}', { number: 1 }));
+  const count = new TextNode(translate('{count} locked', { count: 2 }));
+  const hint = new TextNode(
+    translate('Automatic currently uses {type}.', { type: translate('Shaft / axle') }),
+  );
+  const remove = new ElementNode('button', {
+    'aria-label': translate('Remove parameter {number}', { number: 1 }),
+  });
+  const root = new ElementNode('div').append(
+    new ElementNode('span').append(label, count, hint),
+    remove,
+  );
+  for (let pass = 0; pass < 3; pass++) {
+    localizeUi(root as unknown as ParentNode);
+    assert.equal(label.nodeValue, 'Параметр 1');
+    assert.equal(remove.attrs['aria-label'], 'Видалити параметр 1');
+    assert.equal(count.nodeValue, 'Заблоковано: 2');
+    assert.equal(hint.nodeValue, 'Автоматично вибрано: Вал / вісь.');
+  }
+});
+
 test('DOM localization preserves user fields and drawing SVG through repeated language changes', () => {
   const copy = new TextNode('Material');
   const name = new TextNode('Material');
