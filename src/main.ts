@@ -3,7 +3,7 @@ import { createCadClient } from './cad/client';
 import { autoDimensions, formatDimension } from './drawing/dimensions';
 import { normalizeToleranceNumber, parseDimensionTolerance } from './drawing/tolerances';
 import { renderToleranceFields, type ToleranceMode } from './ui/tolerance-editor';
-import { renderDrawingToolbar, dimensionTools } from './ui/drawing-toolbar';
+import { renderWorkspaceControls, dimensionTools } from './ui/drawing-toolbar';
 import { initializeDrawing } from './drawing/layout';
 import { titleBlockDefaults, cleanTitleBlockText } from './drawing/title-block-data';
 import {
@@ -186,9 +186,9 @@ function render(): void {
       </aside>
       <main class="drawing-workspace">
         <div class="workspace-heading"><div><div class="eyebrow">DRAWING WORKSPACE</div><h1>${part ? e(part.name) : 'From solid to sheet'}</h1></div><div class="export-group">${button('export-svg', 'SVG', undefined, 'secondary compact', !part || busy ? 'disabled' : '')}${button('export-pdf', `Export PDF${state.selected.size > 1 ? ` · ${state.selected.size}` : ''}`, 'download', 'primary', !state.selected.size || busy ? 'disabled' : '')}</div></div>
-        ${renderDrawingToolbar({ tool, enabled: Boolean(part) && !busy, canUndo: Boolean(history()?.canUndo), canRedo: Boolean(history()?.canRedo), zoomOptions: zoomOptions() })}
+        <div class="canvas-shell">${renderWorkspaceControls({ tool, enabled: Boolean(part) && !busy, canUndo: Boolean(history()?.canUndo), canRedo: Boolean(history()?.canRedo), zoomOptions: zoomOptions() })}
         <div class="canvas-area ${!['select', 'pan'].includes(tool) ? 'measuring' : ''}" id="canvas-area" tabindex="0" aria-label="Drawing canvas. Wheel to zoom, drag empty space to pan."><div class="drop-overlay">${icon('upload')}Drop STEP files to import</div><div id="paper-host"></div>${!part ? views.renderEmpty() : ''}</div>
-        <div class="canvas-status"><span id="tool-hint">${e(canvasHint)}</span><span>${part ? `${state.settings.format} · ${state.settings.orientation} · mm` : 'STEP / STP · Multiple files supported'}</span></div>
+        </div><div class="canvas-status"><span id="tool-hint">${e(canvasHint)}</span><span>${part ? `${state.settings.format} · ${state.settings.orientation} · mm` : 'STEP / STP · Multiple files supported'}</span></div>
       </main>
       <aside class="inspector" aria-label="Drawing properties">
         <div class="inspector-tabs" role="tablist">${['sheet', 'details', 'dimensions'].map((t) => `<button role="tab" aria-selected="${inspectorTab === t}" data-action="tab:${t}" class="${inspectorTab === t ? 'active' : ''}">${t === 'details' ? 'Title block' : t[0].toUpperCase() + t.slice(1)}</button>`).join('')}</div>

@@ -24,7 +24,7 @@ The application is a static TypeScript/Vite project with a small shared data mod
 | `src/state.ts`                                             | Drawing defaults, workspace shape and per-part dimension/layout snapshot history                   |
 | `src/main.ts`                                              | Workspace interaction, import queue, selected parts, project files and accessible controls         |
 | `src/ui/drawing-canvas.ts`                                 | Persistent canvas controller for pointer gestures, draft placement, selection and viewport updates |
-| `src/ui/drawing-toolbar.ts`                                | Visible measurement-tool palette, selection/pan controls and viewport actions                      |
+| `src/ui/drawing-toolbar.ts`                                | Compact floating icon dock with tooltips and separate viewport-control dock                        |
 | `src/ui/dimension-editor.ts`                               | Compact selected-dimension panel with tolerance controls and optional position/text settings       |
 | `src/ui/viewport.ts`                                       | Pure fit, pan, cursor-anchored zoom and viewport/sheet coordinate conversion                       |
 | `src/ui/geometry-picking.ts`                               | Screen-radius picking of edges, endpoints and centres with model-coordinate references             |
@@ -64,7 +64,7 @@ The canvas has three coordinate spaces: model coordinates for measurements, pape
 
 Display zoom is clamped to 25–1600%. Space + drag, middle mouse drag, the hand tool, or dragging empty space in selection mode pans the sheet. `0` fits the sheet; `+` and `-` zoom around the viewport centre. These operations never change the model, drawing scale, annotation values or cached drawing layout.
 
-Geometry and dimension picking use screen-pixel tolerances so their hit areas remain usable at different zoom levels. Six visible buttons expose Horizontal (`H`), Vertical (`V`), Aligned (`L`), Diameter (`D`), Radius (`R`) and Angle (`A`) tools. Shortcuts are inactive while text fields are being edited. A new dimension follows a pick → draft preview → click-to-place interaction. Selecting a dimension opens its compact editing panel; existing labels and dimension lines can be dragged. `Esc` cancels the pending operation; undo/redo acts on committed dimension/layout snapshots.
+Geometry and dimension picking use screen-pixel tolerances so their hit areas remain usable at different zoom levels. A compact floating dock exposes six visible dimension icons: Horizontal (`H`), Vertical (`V`), Aligned (`L`), Diameter (`D`), Radius (`R`) and Angle (`A`). Each icon has an accessible name, a tool/shortcut tooltip and an active state. A separate zoom dock contains viewport controls. Shortcuts are inactive while text fields are being edited. A new dimension follows a pick → draft preview → click-to-place interaction. Selecting a dimension opens its compact editing panel; existing labels and dimension lines can be dragged. `Esc` cancels the pending operation; undo/redo acts on committed dimension/layout snapshots.
 
 ## Dimension tolerances
 

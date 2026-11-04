@@ -21,13 +21,14 @@ const paths: Record<string, string> = {
   dimension: '<path d="M4 5v14m16-14v14M4 12h16m-12-3-4 3 4 3m8-6 4 3-4 3"/>',
   dimensionHorizontal: '<path d="M4 5v14m16-14v14M4 12h16m-12-3-4 3 4 3m8-6 4 3-4 3"/>',
   dimensionVertical: '<path d="M5 4h14M5 20h14M12 4v16m-3-12 3-4 3 4m-6 8 3 4 3-4"/>',
-  dimensionAligned: '<path d="m3 15 6 6M15 3l6 6M6 18 18 6m-8 11-4 1 1-4m7-7 4-1-1 4"/>',
+  dimensionAligned: '<path d="m3 13 8 8M13 3l8 8M7 17 17 7M8 14l-1 3 3-1M14 8l3-1-1 3"/>',
   dimensionDiameter:
-    '<circle cx="12" cy="12" r="7"/><path d="M4 20 20 4m-11 15-5 1 1-5M15 5l5-1-1 5"/>',
+    '<circle cx="12" cy="12" r="7"/><path d="M7 17 17 7M8 14l-1 3 3-1M14 8l3-1-1 3"/>',
   dimensionRadius:
-    '<path d="M4 12a8 8 0 1 1 8 8M12 12l5.7-5.7m-4 .4 4-.4-.4 4"/><circle cx="12" cy="12" r=".8"/>',
-  dimensionAngle: '<path d="M4 4v16L20 4M4 12a8 8 0 0 1 5.7 2.3"/>',
-  magic: '<path d="m4 20 12-12 4 4L8 24M16 3V0M22 6h3M5 5l2 2M13 15l-4-4"/>',
+    '<path d="M4 12a8 8 0 1 1 8 8M12 12l5.5-5.5M14.3 6.8l3.2-.3-.3 3.2"/><circle cx="12" cy="12" r=".85" fill="currentColor" stroke="none"/>',
+  dimensionAngle: '<path d="M4 19h17M4 19 18 5M11 19a7 7 0 0 0-2.05-4.95"/>',
+  magic:
+    '<path d="m4 19 10-10 3 3L7 22 4 19ZM11 12l3 3M18 2v4m-2-2h4M5 4v4M3 6h4M20 17v4m-2-2h4"/>',
   lock: '<rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>',
   cube: '<path d="m12 3 9 5v9l-9 5-9-5V8l9-5Zm0 10v9M3 8l9 5 9-5M8 5l9 5"/>',
 };
