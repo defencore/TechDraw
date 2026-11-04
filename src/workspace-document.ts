@@ -1,8 +1,21 @@
 import type { Dimension, DrawingAnnotation, DrawingLayout, Part } from './model';
 import { autoDimensions } from './drawing/dimensions';
 import { initializeDrawing } from './drawing/layout';
-import type { ProjectData } from './project';
+import { parsePartInstructions, type ProjectData } from './project';
+import { drawingSettingsForInstructions } from './drawing/manufacturing-instructions';
 import { DimensionHistory, type WorkspaceState } from './state';
+
+/** Locked document objects keep their source position and data through generic edits. */
+function preserveLocked<T extends { id: string; locked?: boolean }>(
+  current: readonly T[],
+  next: readonly T[],
+): T[] {
+  const fixed = current.map((item, index) => ({ item, index })).filter(({ item }) => item.locked);
+  const fixedIds = new Set(fixed.map(({ item }) => item.id));
+  const result = next.filter((item) => !fixedIds.has(item.id));
+  for (const { item, index } of fixed) result.splice(Math.min(index, result.length), 0, item);
+  return result;
+}
 
 /** Document edits and physical layouts are independent from DOM and viewport state. */
 export class WorkspaceDocument {
@@ -21,9 +34,27 @@ export class WorkspaceDocument {
   get annotations(): DrawingAnnotation[] {
     return this.state.activeId ? (this.state.annotations[this.state.activeId] ?? []) : [];
   }
+  getInstructions(partId: string): string {
+    return this.state.instructions[partId] ?? '';
+  }
+  get hasLocks(): boolean {
+    return (
+      Object.values(this.state.dimensions).some((items) => items.some((item) => item.locked)) ||
+      Object.values(this.state.annotations).some((items) => items.some((item) => item.locked))
+    );
+  }
+  private partHasLocks(id: string): boolean {
+    return (
+      (this.state.dimensions[id] ?? []).some((item) => item.locked) ||
+      (this.state.annotations[id] ?? []).some((item) => item.locked)
+    );
+  }
   get history(): DimensionHistory | undefined {
     const id = this.state.activeId;
     if (!id) return;
+    return this.historyFor(id);
+  }
+  private historyFor(id: string): DimensionHistory {
     if (!this.histories.has(id)) this.histories.set(id, new DimensionHistory());
     return this.histories.get(id)!;
   }
@@ -36,17 +67,19 @@ export class WorkspaceDocument {
   layout(part: Part): DrawingLayout {
     const key = this.settingsKey();
     if (key !== this.layoutSettingsKey) {
-      this.state.layouts = {};
-      for (const history of this.histories.values()) history.invalidateLayouts();
+      if (!this.hasLocks) {
+        this.state.layouts = {};
+        for (const history of this.histories.values()) history.invalidateLayouts();
+      }
       this.layoutSettingsKey = key;
     }
     if (!this.state.layouts[part.id]) {
       const initialized = initializeDrawing(
         part,
         this.state.dimensions[part.id] ?? [],
-        this.state.settings,
+        drawingSettingsForInstructions(this.state.settings, this.getInstructions(part.id)),
         {
-          arrange: this.pendingArrangement.has(part.id),
+          arrange: this.pendingArrangement.has(part.id) && !this.partHasLocks(part.id),
         },
       );
       this.state.dimensions[part.id] = initialized.dimensions;
@@ -61,22 +94,39 @@ export class WorkspaceDocument {
     this.state.selected.add(part.id);
     this.state.dimensions[part.id] = autoDimensions(part);
     this.state.annotations[part.id] = [];
+    this.state.instructions[part.id] = '';
     this.pendingArrangement.add(part.id);
   }
 
   checkpoint(): void {
-    this.history?.record({
-      dimensions: this.dimensions,
-      annotations: this.annotations,
-      layout: this.state.layouts[this.state.activeId!],
+    if (this.state.activeId) this.checkpointFor(this.state.activeId);
+  }
+  private checkpointFor(id: string): void {
+    this.historyFor(id).record({
+      dimensions: this.state.dimensions[id] ?? [],
+      annotations: this.state.annotations[id] ?? [],
+      layout: this.state.layouts[id],
+      instructions: this.getInstructions(id),
     });
+  }
+
+  setInstructions(partId: string, text: string): boolean {
+    if (!this.state.parts.some((part) => part.id === partId)) return false;
+    const validated = parsePartInstructions(text);
+    if (validated === this.getInstructions(partId)) return false;
+    this.checkpointFor(partId);
+    this.state.instructions[partId] = validated;
+    if (!this.partHasLocks(partId)) delete this.state.layouts[partId];
+    return true;
   }
 
   changeAnnotations(next: DrawingAnnotation[]): boolean {
     const id = this.state.activeId;
-    if (!id || JSON.stringify(next) === JSON.stringify(this.annotations)) return false;
+    if (!id) return false;
+    const protectedNext = preserveLocked(this.annotations, next);
+    if (JSON.stringify(protectedNext) === JSON.stringify(this.annotations)) return false;
     this.checkpoint();
-    this.state.annotations[id] = structuredClone(next);
+    this.state.annotations[id] = structuredClone(protectedNext);
     return true;
   }
 
@@ -86,13 +136,44 @@ export class WorkspaceDocument {
   ): boolean {
     const id = this.state.activeId;
     if (!id) return false;
-    if (!options.arrange && JSON.stringify(next) === JSON.stringify(this.dimensions)) return false;
+    if (options.arrange && this.partHasLocks(id)) return false;
+    const protectedNext = preserveLocked(this.dimensions, next);
+    if (!options.arrange && JSON.stringify(protectedNext) === JSON.stringify(this.dimensions))
+      return false;
     if (options.record !== false) this.checkpoint();
     if (options.arrange) {
       delete this.state.layouts[id];
       this.pendingArrangement.add(id);
     }
-    this.state.dimensions[id] = structuredClone(next);
+    this.state.dimensions[id] = structuredClone(protectedNext);
+    return true;
+  }
+
+  setSelectionLocked(
+    selection: { dimensions: ReadonlySet<string>; annotations: ReadonlySet<string> },
+    locked: boolean,
+  ): boolean {
+    const id = this.state.activeId;
+    if (!id) return false;
+    if (typeof locked !== 'boolean') throw new TypeError('Locked state must be a boolean.');
+    const dimensions = this.dimensions.map((item) =>
+      selection.dimensions.has(item.id) && Boolean(item.locked) !== locked
+        ? { ...item, locked }
+        : item,
+    );
+    const annotations = this.annotations.map((item) =>
+      selection.annotations.has(item.id) && Boolean(item.locked) !== locked
+        ? { ...item, locked }
+        : item,
+    );
+    if (
+      JSON.stringify(dimensions) === JSON.stringify(this.dimensions) &&
+      JSON.stringify(annotations) === JSON.stringify(this.annotations)
+    )
+      return false;
+    this.checkpoint();
+    this.state.dimensions[id] = structuredClone(dimensions);
+    this.state.annotations[id] = structuredClone(annotations);
     return true;
   }
 
@@ -103,12 +184,14 @@ export class WorkspaceDocument {
       dimensions: this.dimensions,
       annotations: this.annotations,
       layout: this.state.layouts[id],
+      instructions: this.getInstructions(id),
     };
     const result = this.history?.[direction](current);
     if (!result) return false;
     this.pendingArrangement.delete(id);
     this.state.dimensions[id] = result.dimensions;
     this.state.annotations[id] = result.annotations ?? [];
+    if (result.instructions !== undefined) this.state.instructions[id] = result.instructions;
     if (result.layout) this.state.layouts[id] = result.layout;
     else delete this.state.layouts[id];
     return true;
@@ -119,6 +202,7 @@ export class WorkspaceDocument {
     this.state.selected.delete(id);
     delete this.state.dimensions[id];
     delete this.state.annotations[id];
+    delete this.state.instructions[id];
     delete this.state.layouts[id];
     this.pendingArrangement.delete(id);
     this.histories.delete(id);
@@ -130,6 +214,7 @@ export class WorkspaceDocument {
     this.state.parts = project.parts;
     this.state.dimensions = project.dimensions;
     this.state.annotations = project.annotations;
+    this.state.instructions = project.instructions;
     this.state.layouts = project.layouts;
     this.state.settings = project.settings;
     this.state.selected = new Set(project.selected);

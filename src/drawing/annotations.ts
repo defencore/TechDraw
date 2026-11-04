@@ -1,6 +1,7 @@
 import type { Bounds2, DrawingAnnotation, Point2 } from '../model';
 import { measureDimensionText } from './dimension-label';
-import { applyDrawingAppearance, type DrawingAppearance } from './appearance';
+import { drawingPalette, type DrawingAppearance } from './appearance';
+import { annotationColor } from './annotation-style';
 
 const xml = (value: string) =>
   value.replace(
@@ -71,7 +72,8 @@ export function renderAnnotation(
   selected = false,
   appearance: DrawingAppearance = 'paper',
 ): string {
-  const color = selected ? '#16745e' : '#20262b';
+  const color = annotationColor(annotation.color);
+  const palette = drawingPalette(appearance);
   const bounds = annotationBounds(annotation),
     a = annotation.points[0],
     b = annotation.points.at(-1)!;
@@ -79,7 +81,7 @@ export function renderAnnotation(
   if (annotation.kind === 'text') {
     const size = annotation.fontSize ?? 3.5;
     content =
-      `<rect x="${n(bounds.minX)}" y="${n(bounds.minY)}" width="${n(bounds.maxX - bounds.minX)}" height="${n(bounds.maxY - bounds.minY)}" fill="white" stroke="none"/>` +
+      `<rect x="${n(bounds.minX)}" y="${n(bounds.minY)}" width="${n(bounds.maxX - bounds.minX)}" height="${n(bounds.maxY - bounds.minY)}" fill="${palette.background}" stroke="none"/>` +
       (annotation.text ?? '')
         .replace(/\r\n?/g, '\n')
         .split('\n')
@@ -98,12 +100,9 @@ export function renderAnnotation(
       content += `<path d="M${annotationArrow(annotation).map(point).join(' L')} Z" fill="${color}" stroke="none"/>`;
   }
   const selection = selected
-    ? `<rect class="annotation-selection" x="${n(bounds.minX - 1)}" y="${n(bounds.minY - 1)}" width="${n(bounds.maxX - bounds.minX + 2)}" height="${n(bounds.maxY - bounds.minY + 2)}" fill="none" stroke="${color}" stroke-width=".2" stroke-dasharray="1 .7"/>`
+    ? `<rect class="annotation-selection" x="${n(bounds.minX - 1)}" y="${n(bounds.minY - 1)}" width="${n(bounds.maxX - bounds.minX + 2)}" height="${n(bounds.maxY - bounds.minY + 2)}" fill="none" stroke="#6ee7ff" stroke-width=".3" stroke-dasharray="1 .7"/>`
     : '';
-  return applyDrawingAppearance(
-    `<g data-annotation-id="${xml(annotation.id)}" data-annotation-kind="${annotation.kind}" fill="none" stroke="${color}" stroke-width="${annotation.strokeWidth}" stroke-linecap="round" stroke-linejoin="round">${content}${selection}</g>`,
-    appearance,
-  );
+  return `<g data-annotation-id="${xml(annotation.id)}" data-annotation-kind="${annotation.kind}" fill="none" stroke="${color}" stroke-width="${annotation.strokeWidth}" stroke-linecap="round" stroke-linejoin="round">${content}${selection}</g>`;
 }
 
 export function renderAnnotations(

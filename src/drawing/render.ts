@@ -9,6 +9,7 @@ import type {
 } from '../model';
 import { annotationBounds, renderAnnotations } from './annotations';
 import { applyDrawingAppearance, type DrawingAppearance } from './appearance';
+import { drawingSettingsForInstructions } from './manufacturing-instructions';
 export type { DrawingAppearance } from './appearance';
 import { autoDimensionWarnings } from './dimensions';
 import { dimensionGeometry, toPaper, type ViewTransform } from './dimension-geometry';
@@ -34,6 +35,7 @@ export interface RenderedDrawing {
 export interface DrawingRenderOptions {
   appearance?: DrawingAppearance;
   annotations?: readonly DrawingAnnotation[];
+  instructions?: string;
 }
 
 export const escapeXml = (value: unknown): string =>
@@ -199,6 +201,7 @@ export function renderDrawing(
   layoutOverride?: Pick<RenderedDrawing, 'scale' | 'viewTransforms'>,
   options: DrawingRenderOptions = {},
 ): RenderedDrawing {
+  settings = drawingSettingsForInstructions(settings, options.instructions);
   const page = drawingPage(settings);
   const { width, height, left, right, top, bottom, blockHeight } = page;
   const { minX: clipLeft, minY: clipTop, maxX: clipRight, maxY: clipBottom } = page.content;
@@ -363,41 +366,33 @@ export function renderDrawing(
         'Material',
       );
   }
-  const noteWidth = Math.max(0, bx - left - 8);
-  const noteValue = gost
-    ? [
-        settings.tolerance
-          ? `${settings.template === 'eskd-uk' ? 'Загальні допуски' : 'General tolerance'}: ${settings.tolerance}`
-          : '',
-        settings.notes,
-      ]
-        .filter(Boolean)
-        .join('\n')
-    : settings.notes ||
-      'Review geometry, tolerances and manufacturing requirements before release.';
-  const notes = wrapText(
-    noteValue,
-    noteWidth > 50 ? noteWidth : width - left - right - 6,
-    noteWidth > 50 ? 8 : 2,
-    2.6,
-  );
+  const notes = page.notes;
   if (notes.omitted)
     warnings.push(
-      `${notes.omitted} technical note lines do not fit on this sheet. Shorten the notes or choose a wider sheet.`,
+      `${notes.omitted} technical note lines do not fit on this sheet. Shorten the notes or choose a larger sheet.`,
     );
-  const noteX = noteWidth > 50 ? left + 3 : left + 3,
-    noteY = noteWidth > 50 ? by + 4 : by - 10;
   const noteMarkup = notes.lines
-    .map((v, i) => text(noteX, noteY + i * 3.7, v, 2.6, 'data-field="technical-note"'))
+    .map((v, i) =>
+      text(
+        notes.x,
+        notes.y + i * notes.lineHeight,
+        v,
+        notes.fontSize,
+        'data-field="technical-note"',
+      ),
+    )
     .join('');
   const templateName = settings.template === 'minimal' ? 'MINIMAL' : 'ISO TECHNICAL';
   const header = gost
     ? ''
     : `<g stroke="none">${text(left + 3, top + 5, `${templateName} · ${part.sourceName}`.slice(0, 100), 2.2, 'fill="#7a838a"')}${text(width - right - 3, top + 5, 'GEOMETRIC DRAFT · REVIEW REQUIRED', 2.2, 'text-anchor="end" fill="#7a838a"')}</g>`;
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}mm" height="${height}mm" viewBox="0 0 ${width} ${height}" role="img" aria-label="Technical drawing of ${escapeXml(part.name)}" style="font-family:Arial,Helvetica,sans-serif;background:white;color:#20262b"><defs><clipPath id="sheet-content"><rect x="${clipLeft}" y="${clipTop}" width="${clipRight - clipLeft}" height="${clipBottom - clipTop}"/></clipPath></defs><rect width="${width}" height="${height}" fill="white"/><g fill="#20262b" stroke="#20262b"><rect x="${left}" y="${top}" width="${width - left - right}" height="${height - top - bottom}" fill="none" stroke-width=".5"/>${header}<g clip-path="url(#sheet-content)" stroke="none">${views}</g><g stroke="none">${noteMarkup}</g>${titleBlock}</g></svg>`;
-  const annotated = svg.replace('</svg>', `${renderAnnotations(options.annotations ?? [])}</svg>`);
+  const annotated = applyDrawingAppearance(svg, options.appearance).replace(
+    '</svg>',
+    `${renderAnnotations(options.annotations ?? [], options.appearance)}</svg>`,
+  );
   return {
-    svg: applyDrawingAppearance(annotated, options.appearance),
+    svg: annotated,
     width,
     height,
     scale,

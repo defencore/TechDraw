@@ -140,6 +140,19 @@ export function panViewport(state: ViewportState, delta: Point2): ViewportState 
   };
 }
 
+/** Floating controls change fit space, not the paper's current physical screen mapping. */
+export function preserveViewportTransform(
+  state: ViewportState,
+  oldMetrics: ViewportMetrics,
+  newMetrics: ViewportMetrics,
+): ViewportState {
+  const previous = getViewportTransform(state, oldMetrics);
+  const base = getViewportTransform(fitViewport(), newMetrics);
+  const zoom = clampViewportZoom(previous.scale / base.scale);
+  const centered = getViewportTransform({ zoom, pan: [0, 0] }, newMetrics);
+  return { zoom, pan: [previous.x - centered.x, previous.y - centered.y] };
+}
+
 /** Preserve the centre sheet point and relative fit zoom when viewport dimensions change. */
 export function resizeViewport(
   state: ViewportState,

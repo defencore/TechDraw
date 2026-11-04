@@ -7,6 +7,9 @@ import { cleanProjectedEdges, importStep } from '../src/cad/engine';
 import type { ProjectedEdge } from '../src/model';
 import { readStepProducts, stepPartDisplayName } from '../src/cad/step-metadata';
 import { createLinearDimension } from '../src/measurements';
+import { SourceRepository } from '../src/io/source-repository';
+import { createProjectArchive, openProjectArchive } from '../src/io/project-archive';
+import { defaultSettings } from '../src/state';
 
 before(async () => {
   const wasm = await fs.readFile(
@@ -76,6 +79,44 @@ test('real STEP preserves nominal dimensions, component placement, products and 
         (edge) => edge.kind === 'line' && edge.sourcePoints && Math.abs(edge.length! - 80) < 1e-6,
       ),
   );
+});
+
+test('a real multi-part STEP archive stores one original assembly and distinct manufacturing instructions for every element', async () => {
+  const bytes = await fs.readFile(new URL('../public/examples/mounting-kit.step', import.meta.url));
+  const originals = new SourceRepository();
+  const source = originals.add({ name: 'mounting-kit.step', kind: 'step', bytes });
+  const result = await importStep(
+    bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+    source.name,
+  );
+  const instructions: Record<string, string> = {};
+  for (const part of result.parts) {
+    part.sourceId = source.id;
+    instructions[part.id] =
+      part.name === 'Mounting plate'
+        ? 'Deburr the plate and inspect the mounting holes.'
+        : 'Inspect the spacer bore after machining.';
+  }
+  const state = {
+    parts: result.parts,
+    activeId: result.parts[0].id,
+    selected: new Set(result.parts.map((part) => part.id)),
+    dimensions: Object.fromEntries(result.parts.map((part) => [part.id, []])),
+    annotations: {},
+    instructions,
+    layouts: {},
+    settings: { ...defaultSettings },
+    description: 'One compact assembly drawing project.',
+  };
+  const opened = await openProjectArchive(await createProjectArchive(state, originals.all()));
+  assert.equal(opened.project.parts.length, 2);
+  assert.equal(opened.sources.length, 1);
+  assert.deepEqual(opened.sources[0].bytes, new Uint8Array(bytes));
+  for (const part of opened.project.parts) {
+    assert.equal(part.sourceId, source.id);
+    assert.equal(opened.project.instructions[part.id], instructions[part.id]);
+    assert.equal(part.views.length, 4);
+  }
 });
 
 test('single-solid exporter boilerplate falls back to the file stem while meaningful product names remain intact', async () => {

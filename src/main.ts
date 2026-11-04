@@ -33,13 +33,13 @@ import {
 } from './ui/title-block-cache';
 import { renderDrawing } from './drawing/render';
 import { DrawingCanvas, type CanvasTool } from './ui/drawing-canvas';
-import { parseProject } from './project';
+import { parseProject, parsePartInstructions } from './project';
 import type { Dimension, DrawingSettings } from './model';
 import { defaultSettings, type WorkspaceState } from './state';
 import { WorkspaceDocument } from './workspace-document';
 import { errorMessage } from './ui/error-message';
 import { icon } from './ui/icons';
-import { button, option } from './ui/components';
+import { button, option, renderLockBadge } from './ui/components';
 import { createWorkspaceViews } from './ui/views';
 import { downloadBlob, escapeHtml as e, readPreference, savePreference } from './ui/utils';
 import {
@@ -53,6 +53,11 @@ import {
 import { DrawingShareController } from './ui/drawing-share';
 import { CaptureRegionController } from './ui/capture-region';
 import { browserScreenAwake } from './ui/screen-awake';
+import { renderDrawingViewerControls } from './ui/viewer-controls';
+import { renderMarkupGuide } from './ui/markup-guide';
+import { DEFAULT_ANNOTATION_COLOR } from './drawing/annotation-style';
+import { GRID_PRESETS } from './ui/grid-spacing-editor';
+import { renderManufacturingInstructions } from './ui/manufacturing-instructions';
 import type { DrawingAppearance } from './drawing/appearance';
 import type { DrawingAnnotation } from './model';
 import {
@@ -78,6 +83,7 @@ const state: WorkspaceState = {
   activeId: null,
   dimensions: {},
   annotations: {},
+  instructions: {},
   description: '',
   layouts: {},
   settings: { ...defaultSettings, ...readTitleBlockCache(titleBlockStorage) },
@@ -91,12 +97,14 @@ let theme = readPreference<string>(
   matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light',
 );
 let inspectorTab = 'dimensions';
+let workspaceMode: 'dimensions' | 'annotations' = 'dimensions';
 let tool: CanvasTool = 'select';
 const dimensionSelection = new DimensionSelection();
 let grid = readGridPreferences(titleBlockStorage);
+let customGrid = !GRID_PRESETS.some((spacing) => spacing === grid.spacing);
 const placement: PlacementControls = { view: 'front', mode: 'cascade', gap: 7 };
 let busy = false;
-let busyOperation: 'import' | 'export' = 'import';
+let busyOperation: 'import' | 'export' | 'prepare' = 'import';
 let autoDetail: 'balanced' | 'full' = 'balanced';
 const collapsedBranches = new Set<string>();
 let progress = '';
@@ -108,13 +116,19 @@ let rendered: ReturnType<typeof renderDrawing> | undefined;
 let helpOpen = false;
 let focusMode = false;
 let viewerMode = false;
-let nativeViewerFullscreen = false;
 let viewerGeneration = 0;
+let viewerFocusSnapshot = false;
 let selectedAnnotation: string | undefined;
 let drawingAppearance: 'auto' | DrawingAppearance = 'auto';
 let exportAppearance: DrawingAppearance = 'paper';
 let dxfUnit: DxfUnit | undefined;
-const annotationOptions = { text: '', fontSize: 3.5, strokeWidth: 0.5 };
+const annotationOptions = {
+  text: '',
+  fontSize: 3.5,
+  strokeWidth: 0.5,
+  color: DEFAULT_ANNOTATION_COLOR,
+};
+const instructionDrafts = new Map<string, string>();
 const dimensionFilter = { ...defaultDimensionFilter };
 const cad = createCadClient((message: string) => {
   progress = message;
@@ -123,6 +137,14 @@ const cad = createCadClient((message: string) => {
 const active = () => workspaceDocument.active;
 const dims = () => workspaceDocument.dimensions;
 const annotations = () => (state.activeId ? (state.annotations[state.activeId] ?? []) : []);
+const instructions = (id = state.activeId) => (id ? (state.instructions[id] ?? '') : '');
+const lockedSelectionCount = () =>
+  dims().filter((item) => dimensionSelection.ids.has(item.id) && item.locked).length +
+  Number(Boolean(annotations().find((item) => item.id === selectedAnnotation)?.locked));
+const partHasLocks = (id: string) =>
+  (state.dimensions[id] ?? []).some((item) => item.locked) ||
+  (state.annotations[id] ?? []).some((item) => item.locked);
+const hasLockedItems = () => workspaceDocument.hasLocks;
 const screenAppearance = (): DrawingAppearance =>
   drawingAppearance === 'auto' ? (theme === 'dark' ? 'blueprint' : 'paper') : drawingAppearance;
 const screenAwake = browserScreenAwake(() => updateViewerStatus());
@@ -133,6 +155,10 @@ const toleranceEditor = new ToleranceEditorController({
   },
   precision: () => state.settings.precision,
   commit({ partId, dimension }, tolerance) {
+    if (dimension.locked) {
+      toast('Unlock the selection before editing or deleting it.');
+      return;
+    }
     const next = structuredClone(state.dimensions[partId]);
     const edited = next.find((item) => item.id === dimension.id)!;
     if (tolerance) edited.tolerance = tolerance;
@@ -151,15 +177,21 @@ const drawingCanvas = new DrawingCanvas({
     if (id) {
       dimensionSelection.clear();
       inspectorTab = 'annotations';
+      if (workspaceMode !== 'annotations') {
+        workspaceMode = 'annotations';
+        render();
+        return;
+      }
     }
     refreshInspector();
     renderPaper();
   },
   addAnnotation(annotation) {
     changeAnnotations([...annotations(), annotation]);
-    selectedAnnotation = annotation.id;
-    tool = 'select';
+    selectedAnnotation = annotation.kind === 'freehand' ? undefined : annotation.id;
+    tool = annotation.kind === 'freehand' ? 'freehand' : 'select';
     inspectorTab = 'annotations';
+    workspaceMode = 'annotations';
     render();
   },
   editAnnotation(annotation) {
@@ -169,13 +201,24 @@ const drawingCanvas = new DrawingCanvas({
     selectedAnnotation = undefined;
     dimensionSelection.select(id, additive);
     inspectorTab = 'dimensions';
+    if (workspaceMode !== 'dimensions') {
+      workspaceMode = 'dimensions';
+      render();
+      return;
+    }
     refreshInspector();
   },
   selectMany(ids, additive) {
+    const switchingMode = workspaceMode !== 'dimensions';
     selectedAnnotation = undefined;
     dimensionSelection.replace(additive ? [...dimensionSelection.ids, ...ids] : ids);
     setTool('select');
     inspectorTab = 'dimensions';
+    workspaceMode = 'dimensions';
+    if (switchingMode) {
+      render();
+      return;
+    }
     refreshInspector();
     renderPaper();
   },
@@ -188,6 +231,7 @@ const drawingCanvas = new DrawingCanvas({
         ? [
             'edit-dimension',
             'fit-selection',
+            'toggle-selection-lock',
             'share-drawing',
             'delete-selected-dimensions',
             'command-palette',
@@ -196,6 +240,7 @@ const drawingCanvas = new DrawingCanvas({
           ? [
               'edit-dimension',
               'fit-selection',
+              'toggle-selection-lock',
               'place-dimensions:left',
               'place-dimensions:right',
               'place-dimensions:top',
@@ -251,6 +296,10 @@ const drawingCanvas = new DrawingCanvas({
   },
   error: toast,
 });
+const controlsResize = new ResizeObserver(() => {
+  measureCanvasControls();
+  drawingCanvas.refreshViewport();
+});
 const imageShare = new DrawingShareController({
   drawing(appearance) {
     const part = active();
@@ -258,6 +307,7 @@ const imageShare = new DrawingShareController({
     return {
       ...renderDrawing(part, dims(), state.settings, undefined, workspaceDocument.layout(part), {
         annotations: annotations(),
+        instructions: instructions(),
         appearance,
       }),
       name: part.name,
@@ -291,7 +341,7 @@ const contextMenu = new ContextMenuController({
 function commandContext(): CommandContext {
   return {
     busy,
-    importing: busy && busyOperation === 'import',
+    importing: busy && busyOperation !== 'export',
     partCount: state.parts.length,
     hasActivePart: Boolean(active()),
     selectedPartCount: state.selected.size,
@@ -307,7 +357,10 @@ function commandContext(): CommandContext {
     helpOpen,
     viewerMode,
     annotationSelection: Boolean(selectedAnnotation),
+    lockedCount: lockedSelectionCount(),
     keepAwake: screenAwake.enabled,
+    nativeFullscreen: Boolean(document.fullscreenElement),
+    nativeFullscreenAvailable: Boolean(document.fullscreenEnabled),
   };
 }
 function startCapture(): void {
@@ -348,9 +401,13 @@ function updateSelectionActions(): void {
   const bar = app.querySelector<HTMLElement>('#selection-actions');
   if (!bar) return;
   const count = dimensionSelection.ids.size;
+  const lockedCount = lockedSelectionCount();
+  const lockCommand = getCommand('toggle-selection-lock', commandContext());
+  const countLabel = `${count} selected${lockedCount ? ` · ${lockedCount} locked` : ''}`;
+  const editLabel = count === 1 ? 'Edit' : 'Properties';
   bar.hidden = !count || busy;
   bar.innerHTML = count
-    ? `<span class="selection-actions-count">${count} selected</span>${button('edit-dimension', count === 1 ? 'Edit' : 'Properties', 'dimension', 'selection-action')}${button('fit-selection', 'Focus', 'fit', 'selection-action', 'title="Fit selected dimensions · F"')}${button('delete-selected-dimensions', 'Delete', 'trash', 'selection-action destructive')}${button('clear-dimension-selection', '', 'close', 'selection-action', 'aria-label="Clear dimension selection"')}`
+    ? `<span class="selection-actions-count" title="${e(t(countLabel))}">${e(t(countLabel))}</span>${button('edit-dimension', editLabel, 'dimension', 'selection-action', `aria-label="${e(t(editLabel))}" title="${e(t(editLabel))}"`)}${button('fit-selection', 'Focus', 'fit', 'selection-action', 'title="Fit selected dimensions · F"')}${button('toggle-selection-lock', lockCommand?.label ?? 'Lock selection', lockCommand?.icon ?? 'lock', 'selection-action', `aria-label="${e(lockCommand?.label ?? t('Lock selection'))}" title="${e(lockCommand?.label ?? t('Lock selection'))}"`)}${button('delete-selected-dimensions', 'Delete', 'trash', 'selection-action destructive', `aria-label="${e(t('Delete'))}" title="${e(t(lockedCount ? 'Unlock the selection before editing or deleting it.' : 'Delete'))}"${lockedCount ? ' disabled' : ''}`)}${button('clear-dimension-selection', '', 'close', 'selection-action', 'aria-label="Clear dimension selection" title="Clear dimension selection"')}`
     : '';
   localizeUi(bar);
 }
@@ -376,6 +433,8 @@ function refreshInspector(): void {
     autoDetail,
     collapsedBranches,
     annotationPanel: renderMarkupPanel(),
+    instructionsPanel: renderInstructionsPanel(),
+    hasLockedItems: hasLockedItems(),
   });
   const body = app.querySelector('.inspector-body');
   if (body) body.innerHTML = views.renderInspector();
@@ -384,6 +443,8 @@ function refreshInspector(): void {
   updateDrawingFeedback();
   updateSelectionActions();
   localizeUi(app);
+  measureCanvasControls();
+  drawingCanvas.refreshViewport();
   for (const tab of app.querySelectorAll<HTMLElement>('.inspector-tabs [role="tab"]')) {
     const selected = tab.dataset.action === `tab:${inspectorTab}`;
     tab.classList.toggle('active', selected);
@@ -403,16 +464,51 @@ function toast(message: string): void {
 }
 
 function renderViewerControls(): string {
-  return `<div class="viewer-controls" role="toolbar" aria-label="Drawing viewer"><label class="viewer-part"><span class="sr-only">Part</span><select id="viewer-part" aria-label="Part">${state.parts.map((part) => `<option value="${e(part.id)}" ${part.id === state.activeId ? 'selected' : ''} data-user-content>${e(part.name)}</option>`).join('')}</select></label><label class="viewer-appearance"><span class="sr-only">Appearance</span><select id="viewer-appearance" aria-label="Appearance">${option('paper', 'Paper', screenAppearance())}${option('blueprint', 'Blueprint', screenAppearance())}</select></label>${button('toggle-wake-lock', '', 'sun', 'icon-button', `aria-label="Keep screen awake" aria-pressed="${screenAwake.enabled}"`)}<button type="button" class="viewer-awake" id="viewer-awake" data-status="${screenAwake.status}" aria-live="polite">${e(wakeStatusText())}</button>${button('share-drawing', '', 'copy', 'icon-button', 'aria-label="Copy image"')}${button('exit-viewer', '<span>Exit viewer</span>', 'close', 'secondary viewer-exit')}</div>`;
+  return renderDrawingViewerControls({
+    parts: state.parts,
+    activeId: state.activeId,
+    appearance: screenAppearance(),
+    keepAwake: screenAwake.enabled,
+    wakeStatus: screenAwake.status,
+    wakeLabel: wakeStatusText(),
+    fullscreenAvailable: Boolean(document.fullscreenEnabled),
+    fullscreen: Boolean(document.fullscreenElement),
+  });
 }
 function renderMarkupPanel(): string {
   const selected = annotations().find((item) => item.id === selectedAnnotation);
-  return `${renderAnnotationEditor(selected, annotationOptions)}<div class="annotation-list"><div class="section-label">ANNOTATIONS · ${annotations().length}</div>${annotations()
+  return `${renderMarkupGuide({ tool, enabled: !busy && Boolean(active()), selected: Boolean(selected) })}${renderAnnotationEditor(selected, annotationOptions, tool)}<div class="annotation-list"><div class="section-label">ANNOTATIONS · ${annotations().length}</div>${annotations()
     .map(
       (item, index) =>
-        `<button type="button" class="annotation-list-item ${item.id === selectedAnnotation ? 'active' : ''}" data-annotation-select="${e(item.id)}"><span>${e(item.kind)}</span><span data-user-content>${e(item.text?.split('\n')[0].slice(0, 45) || String(index + 1))}</span></button>`,
+        `<button type="button" class="annotation-list-item ${item.id === selectedAnnotation ? 'active' : ''}" data-annotation-select="${e(item.id)}"><span>${e(item.kind)}</span><span data-user-content>${e(item.text?.split('\n')[0].slice(0, 45) || String(index + 1))}</span>${renderLockBadge(item.locked)}</button>`,
     )
     .join('')}</div>`;
+}
+function renderInstructionsPanel(): string {
+  const committed = instructions();
+  const draft = state.activeId ? (instructionDrafts.get(state.activeId) ?? committed) : '';
+  return renderManufacturingInstructions(draft, !busy && Boolean(active()), {
+    dirty: draft !== committed,
+    locked: Boolean(state.activeId && partHasLocks(state.activeId)),
+  });
+}
+function flushInstructionDrafts(): void {
+  const pending = [...instructionDrafts]
+    .filter(([id]) => state.parts.some((part) => part.id === id))
+    .map(([id, text]) => [id, parsePartInstructions(text)] as const);
+  let changed = false;
+  for (const [id, text] of pending) {
+    changed = workspaceDocument.setInstructions(id, text) || changed;
+    instructionDrafts.delete(id);
+  }
+  if (changed) render();
+}
+function syncAnnotationSwatches(color: string): void {
+  for (const swatch of app.querySelectorAll<HTMLElement>('[data-annotation-color]'))
+    swatch.setAttribute(
+      'aria-pressed',
+      String(swatch.dataset.annotationColor === color.toLowerCase()),
+    );
 }
 function wakeStatusText(): string {
   return t(
@@ -430,6 +526,7 @@ function updateViewerStatus(): void {
   if (status) {
     status.textContent = wakeStatusText();
     status.dataset.status = screenAwake.status;
+    status.title = wakeStatusText();
   }
   const button = app.querySelector('[data-action="toggle-wake-lock"]');
   button?.setAttribute('aria-pressed', String(screenAwake.enabled));
@@ -437,12 +534,26 @@ function updateViewerStatus(): void {
 function enterViewer(): void {
   if (!active() || busy) return;
   viewerMode = true;
+  clearTimeout(toastTimer);
+  notification = '';
+  viewerFocusSnapshot = focusMode;
+  focusMode = false;
   selectedAnnotation = undefined;
   dimensionSelection.clear();
   tool = 'select';
   render();
   screenAwake.setActive(true);
+  ++viewerGeneration;
+}
+function toggleNativeFullscreen(): void {
+  if (!viewerMode) return;
   const generation = ++viewerGeneration;
+  if (document.fullscreenElement) {
+    void document
+      .exitFullscreen()
+      .catch(() => toast('System fullscreen is unavailable in this browser.'));
+    return;
+  }
   if (document.fullscreenEnabled && document.documentElement.requestFullscreen) {
     void document.documentElement
       .requestFullscreen()
@@ -451,11 +562,7 @@ function enterViewer(): void {
           if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
           return;
         }
-        if (!document.fullscreenElement) {
-          exitViewer();
-          return;
-        }
-        nativeViewerFullscreen = true;
+        updateNativeFullscreenControl();
       })
       .catch(() => {
         if (generation === viewerGeneration && viewerMode)
@@ -463,10 +570,19 @@ function enterViewer(): void {
       });
   }
 }
+function updateNativeFullscreenControl(): void {
+  const button = app.querySelector<HTMLElement>('[data-action="toggle-native-fullscreen"]');
+  if (!button) return;
+  const fullscreen = Boolean(document.fullscreenElement);
+  const label = t(fullscreen ? 'Exit system fullscreen' : 'System fullscreen');
+  button.setAttribute('aria-pressed', String(fullscreen));
+  button.setAttribute('aria-label', label);
+  button.title = label;
+}
 function exitViewer(): void {
   ++viewerGeneration;
   viewerMode = false;
-  nativeViewerFullscreen = false;
+  focusMode = viewerFocusSnapshot;
   screenAwake.setActive(false);
   if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
   render();
@@ -515,11 +631,13 @@ function render(): void {
     autoDetail,
     collapsedBranches,
     annotationPanel: renderMarkupPanel(),
+    instructionsPanel: renderInstructionsPanel(),
+    hasLockedItems: hasLockedItems(),
   });
   app.innerHTML = `
     <header class="app-header">
       <a class="brand" href="./" aria-label="TechDraw home"><span class="brand-mark">${icon('dimension')}</span><span class="brand-wordmark"><strong>TechDraw<span class="brand-dot">.</span></strong><span class="brand-by">by DEFENCORE</span></span></a>
-      <div class="header-right"><span class="local-pill">${icon('lock')}<span>Files stay on your device</span></span>${renderProjectLink()}${renderLanguageControl()}${button('command-palette', 'Commands <kbd>⌘ / Ctrl K</kbd>', 'search', 'command-search-trigger', 'aria-label="Search commands"')}${button('toggle-focus-mode', '', focusMode ? 'panels' : 'expand', 'icon-button', `aria-label="${focusMode ? 'Show panels' : 'Focus drawing'}" title="Focus drawing · Shift+F" aria-pressed="${focusMode}"`)}${button('help', 'Quick guide', 'info', 'quiet help-button')}${button('theme', '', theme === 'light' ? 'moon' : 'sun', 'icon-button', `aria-label="Switch to ${theme === 'light' ? 'dark' : 'light'} theme" title="Switch theme"`)}</div>
+      <div class="header-right"><span class="local-pill">${icon('lock')}<span>Files stay on your device</span></span>${renderProjectLink()}${renderLanguageControl()}${button('command-palette', 'Commands <kbd>⌘ / Ctrl K</kbd>', 'search', 'command-search-trigger', 'aria-label="Search commands"')}${button('toggle-focus-mode', `<span class="focus-toggle-label">${focusMode ? 'Show panels' : 'Focus mode'}</span>`, focusMode ? 'panels' : 'expand', `quiet focus-mode-toggle${focusMode ? ' active' : ''}`, `aria-label="${focusMode ? 'Show panels' : 'Focus mode'}" title="Focus drawing · Shift+F" aria-pressed="${focusMode}"`)}${button('help', 'Quick guide', 'info', 'quiet help-button')}${button('theme', '', theme === 'light' ? 'moon' : 'sun', 'icon-button', `aria-label="Switch to ${theme === 'light' ? 'dark' : 'light'} theme" title="Switch theme"`)}</div>
     </header>
     <div class="workspace${focusMode ? ' focus-mode' : ''}">
       <aside class="files-panel" aria-label="Model files">
@@ -535,19 +653,20 @@ function render(): void {
         <div class="sidebar-bottom"><div class="private-note">${icon('cube')}<div><strong>Real geometry. Local processing.</strong><p>STEP → CAD kernel → vector drawing.<br>No upload. No account.</p></div></div><a href="https://github.com/defencore/TechDraw" target="_blank" rel="noopener noreferrer">Source & documentation ${icon('arrow')}</a></div>
       </aside>
       <main class="drawing-workspace">
+        ${focusMode ? `<div class="focus-mode-banner" role="status"><span>Focus mode is on</span>${button('toggle-focus-mode', 'Show panels', 'panels', 'text-button')}</div>` : ''}
         <div class="workspace-heading"><div><div class="eyebrow">DRAWING WORKSPACE</div><h1 ${part ? 'data-user-content' : ''}>${part ? e(part.name) : 'From solid to sheet'}</h1></div><div class="export-group">${button('view-drawing', 'View', 'expand', 'secondary compact', !part || busy ? 'disabled' : '')}${button('share-drawing', 'Copy image', 'copy', 'secondary compact', !part || busy ? 'disabled' : '')}${button('export-options', `Export${state.selected.size > 1 ? ` · ${state.selected.size}` : ''}`, 'download', 'primary', !state.selected.size || busy ? 'disabled' : '')}</div></div>
         <div id="workspace-feedback" role="status" aria-live="polite" hidden></div>
-        <div class="canvas-shell"><div id="selection-actions" class="selection-actions" role="toolbar" aria-label="Selected dimension actions" hidden></div>${renderWorkspaceControls({ tool, mode: inspectorTab === 'annotations' ? 'annotations' : 'dimensions', enabled: Boolean(part) && !busy, canUndo: Boolean(workspaceDocument.history?.canUndo), canRedo: Boolean(workspaceDocument.history?.canRedo), zoomOptions: zoomOptions(), grid })}
+        <div class="canvas-shell"><div id="selection-actions" class="selection-actions" role="toolbar" aria-label="Selected dimension actions" hidden></div>${renderWorkspaceControls({ tool, mode: workspaceMode, enabled: Boolean(part) && !busy, canUndo: Boolean(workspaceDocument.history?.canUndo), canRedo: Boolean(workspaceDocument.history?.canRedo), zoomOptions: zoomOptions(), grid, customGrid })}
         <div class="canvas-area ${dimensionTools.some((item) => item.id === tool) ? 'measuring' : ''}" id="canvas-area" tabindex="0" aria-label="Drawing canvas. Wheel to zoom, drag empty space to pan."><div class="drop-overlay">${icon('upload')}Drop STEP files to import</div><div id="paper-host"></div>${!part ? views.renderEmpty() : ''}</div>
         </div><div class="canvas-status"><span id="tool-hint">${e(canvasHint)}</span><span>${part ? `${state.settings.format} · ${state.settings.orientation} · mm` : 'STEP / STP / DXF · Multiple files supported'}</span></div>
       </main>
       <aside class="inspector" aria-label="Drawing properties">
-        <div class="inspector-tabs" role="tablist">${['sheet', 'details', 'dimensions', 'annotations'].map((tab) => `<button role="tab" aria-selected="${inspectorTab === tab}" data-action="tab:${tab}" class="${inspectorTab === tab ? 'active' : ''}">${tab === 'details' ? 'Title block' : tab === 'annotations' ? 'Markup' : tab[0].toUpperCase() + tab.slice(1)}</button>`).join('')}</div>
+        <div class="inspector-tabs" role="tablist">${['dimensions', 'annotations', 'instructions', 'sheet', 'details'].map((tab) => `<button role="tab" aria-selected="${inspectorTab === tab}" data-action="tab:${tab}" class="${inspectorTab === tab ? 'active' : ''}">${tab === 'details' ? 'Title block' : tab === 'annotations' ? 'Markup' : tab[0].toUpperCase() + tab.slice(1)}</button>`).join('')}</div>
         <div class="inspector-body">${views.renderInspector()}</div>
         <div class="review-note">${icon('info')}<p><strong>Review before manufacture</strong>Automatic dimensions are a starting point. Confirm features, tolerances, fits and sections.</p></div>
       </aside>
     </div>
-    <div id="busy-overlay" class="busy-overlay ${busy ? 'visible' : ''}" role="status" aria-live="polite"><div class="busy-card"><span class="spinner"></span><strong>${busyOperation === 'export' ? 'Exporting your PDF' : 'Preparing your drawing'}</strong><p id="progress-message">${e(progress)}</p>${busyOperation === 'import' ? button('cancel', 'Cancel', undefined, 'secondary') : ''}</div></div>
+    <div id="busy-overlay" class="busy-overlay ${busy ? 'visible' : ''}" role="status" aria-live="polite"><div class="busy-card"><span class="spinner"></span><strong>${busyOperation === 'export' ? 'Exporting your PDF' : 'Preparing your drawing'}</strong><p id="progress-message">${e(progress)}</p>${busyOperation !== 'export' ? button('cancel', 'Cancel', undefined, 'secondary') : ''}</div></div>
     <div id="toast" class="toast ${notification ? 'visible' : ''}" role="status" aria-live="polite">${e(notification)}</div>
     ${helpOpen ? views.renderHelp() : ''}${viewerMode ? renderViewerControls() : ''}`;
   if (retainedCanvas) app.querySelector('#canvas-area')!.replaceWith(retainedCanvas);
@@ -562,11 +681,48 @@ function render(): void {
   drawingCanvas.setAnnotationOptions(annotationOptions);
   drawingCanvas.setTool(tool);
   drawingCanvas.setGrid(viewerMode ? { ...grid, visible: false, snap: false } : grid);
+  updateSelectionActions();
+  localizeUi(app);
+  measureCanvasControls();
+  controlsResize.disconnect();
+  for (const control of app.querySelectorAll<HTMLElement>(
+    '.workspace-dock,#selection-actions,.viewer-controls,.grid-dock,.viewport-dock',
+  ))
+    controlsResize.observe(control);
   renderPaper();
   toleranceEditor.restore(app);
   updateCacheStatus();
   updateSelectionActions();
   localizeUi(app);
+}
+
+function measureCanvasControls(): void {
+  const shell = app.querySelector<HTMLElement>('.canvas-shell');
+  if (!shell) return;
+  const bounds = shell.getBoundingClientRect();
+  const toolbar = app.querySelector<HTMLElement>(
+    viewerMode ? '.viewer-controls' : '.workspace-dock',
+  );
+  if (!toolbar || toolbar.getBoundingClientRect().height < 1) return;
+  const nextRow = Math.max(0, toolbar.getBoundingClientRect().bottom - bounds.top + 8);
+  shell.style.setProperty('--selection-top', `${nextRow}px`);
+  const selection = app.querySelector<HTMLElement>('#selection-actions');
+  const top = viewerMode
+    ? nextRow
+    : nextRow +
+      Math.max(44, selection && !selection.hidden ? selection.getBoundingClientRect().height : 0) +
+      8;
+  const docks = [
+    ...shell.querySelectorAll<HTMLElement>(
+      viewerMode ? '.viewport-dock' : '.viewport-dock,.grid-dock',
+    ),
+  ];
+  const bottom = Math.max(
+    56,
+    ...docks.map((dock) => bounds.bottom - dock.getBoundingClientRect().top + 8),
+  );
+  shell.style.setProperty('--canvas-top', `${Math.max(0, top)}px`);
+  shell.style.setProperty('--canvas-bottom', `${bottom}px`);
 }
 
 function updateCacheStatus(): void {
@@ -596,6 +752,7 @@ function renderPaper(): void {
           selectedDimension: dimensionSelection.focus,
           selectedDimensionIds: [...dimensionSelection.ids],
           annotations: annotations(),
+          instructions: instructions(),
           selectedAnnotation,
           appearance: screenAppearance(),
         }
@@ -655,11 +812,17 @@ function setTool(value: CanvasTool): void {
     selectedAnnotation = undefined;
     dimensionSelection.clear();
     inspectorTab = 'annotations';
+    workspaceMode = 'annotations';
     render();
+    if (value === 'text') app.querySelector<HTMLTextAreaElement>('#annotation-text')?.focus();
+    else if (matchMedia('(max-width: 960px)').matches)
+      app.querySelector('#canvas-area')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
     return;
   }
   if (dimensionTools.some((item) => item.id === value)) {
-    const switchingMode = inspectorTab === 'annotations';
+    selectedAnnotation = undefined;
+    const switchingMode = workspaceMode === 'annotations';
+    workspaceMode = 'dimensions';
     dimensionSelection.clear();
     inspectorTab = 'dimensions';
     if (switchingMode) {
@@ -676,6 +839,10 @@ function setTool(value: CanvasTool): void {
   }
 }
 function changeDimensions(next: Dimension[], arrange = false, preserveEditor = false): void {
+  if (arrange && state.activeId && partHasLocks(state.activeId)) {
+    toast('Unlock drawing items before changing the sheet layout.');
+    return;
+  }
   if (!workspaceDocument.changeDimensions(next, { arrange })) return;
   dimensionSelection.retain(next.map((dimension) => dimension.id));
   if (preserveEditor) {
@@ -705,6 +872,7 @@ function syncSettingsFromControls(): void {
     HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement
   >('[data-setting]')) {
     const key = control.dataset.setting as keyof DrawingSettings;
+    if (hasLockedItems() && ['format', 'orientation', 'template', 'scale'].includes(key)) continue;
     (state.settings as any)[key] = controlSettingValue(control, key);
   }
   normalizeSheetOrientation();
@@ -722,7 +890,7 @@ function updateDimensionControl(control: HTMLInputElement): void {
   const key = control.dataset.dimensionSetting as 'offset' | 'prefix' | 'suffix' | undefined;
   if (!key || !dimensionSelection.focus) return;
   const current = dims().find((d) => d.id === dimensionSelection.focus);
-  if (!current) return;
+  if (!current || current.locked) return;
   const value = key === 'offset' ? Number(control.value) : control.value.slice(0, 120);
   if (
     key === 'offset' &&
@@ -903,6 +1071,36 @@ async function loadDxfDemo(): Promise<void> {
     toast(errorMessage(error));
   }
 }
+async function prepareAllDrawings(): Promise<void> {
+  if (busy || viewerMode || !state.parts.length) return;
+  const token = ++importToken;
+  busy = true;
+  busyOperation = 'prepare';
+  progress = 'Preparing drawings for all parts…';
+  state.selected = new Set(state.parts.map((part) => part.id));
+  render();
+  try {
+    for (const [index, part] of state.parts.entries()) {
+      if (token !== importToken) return;
+      progress = `Preparing drawing ${index + 1} of ${state.parts.length}…`;
+      updateProgress();
+      workspaceDocument.layout(part);
+      if (index % 4 === 0)
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    }
+    if (token === importToken)
+      toast(
+        'Drawings are ready for all parts. Export the selected pages or save one compact project ZIP.',
+      );
+  } catch (error) {
+    if (token === importToken) toast(errorMessage(error));
+  } finally {
+    if (token === importToken) {
+      busy = false;
+      render();
+    }
+  }
+}
 async function exportDrawing(): Promise<void> {
   const parts = state.parts.filter((p) => state.selected.has(p.id));
   if (!parts.length || busy) return;
@@ -921,6 +1119,7 @@ async function exportDrawing(): Promise<void> {
           settings: state.settings,
           layout,
           annotations: state.annotations[part.id] ?? [],
+          instructions: instructions(part.id),
           appearance: exportAppearance,
         };
       }),
@@ -969,6 +1168,7 @@ async function openProject(file: File): Promise<void> {
       : undefined;
     const data = archive?.project ?? parseProject(await file.text());
     if (token !== importToken) return;
+    instructionDrafts.clear();
     toleranceEditor.reset();
     const savedOrientation = data.settings.orientation;
     workspaceDocument.replace(data);
@@ -1031,6 +1231,10 @@ function updateGridDensity(): void {
 function placeSelectedDimensions(side: PlacementSide): void {
   const part = active();
   if (!part || !dimensionSelection.ids.size || busy) return;
+  if (lockedSelectionCount()) {
+    toast('Unlock the selection before editing or deleting it.');
+    return;
+  }
   const layout = workspaceDocument.layout(part);
   try {
     const result = applyDimensionPlacement(dims(), new Set(dimensionSelection.ids), part, layout, {
@@ -1046,7 +1250,9 @@ function placeSelectedDimensions(side: PlacementSide): void {
       );
       return;
     }
-    const preview = renderDrawing(part, result.dimensions, state.settings, undefined, layout);
+    const preview = renderDrawing(part, result.dimensions, state.settings, undefined, layout, {
+      instructions: instructions(),
+    });
     if (preview.warnings.some((warning) => warning.startsWith('Dimensions exceed'))) {
       toast(
         'This arrangement would leave the drawing frame. Use a smaller gap, another side or a larger sheet.',
@@ -1074,13 +1280,16 @@ function refreshAutomaticDimensions(): void {
   const refreshed = refreshDimensionSuggestions(part, dims(), autoDetail);
   dimensionSelection.clear();
   drawingCanvas.cancel();
-  changeDimensions(refreshed.dimensions, true);
+  changeDimensions(refreshed.dimensions, !partHasLocks(part.id));
   toast(
     'Automatic suggestions refreshed. Manual dimensions and specifications kept. Undo restores the previous set.',
   );
 }
 
 function openInspector(tab: string): void {
+  if (tab === 'annotations' || tab === 'dimensions') workspaceMode = tab;
+  if (tab === 'dimensions') selectedAnnotation = undefined;
+  if (tab === 'annotations') dimensionSelection.clear();
   const annotationTool = ['text', 'arrow', 'rectangle', 'ellipse', 'freehand'].includes(tool);
   if (
     (tab !== 'annotations' && annotationTool) ||
@@ -1102,6 +1311,10 @@ function normalizeActiveViews(): void {
 }
 function deleteDimensions(ids: ReadonlySet<string>): void {
   if (!ids.size || !state.activeId) return;
+  if (dims().some((item) => ids.has(item.id) && item.locked)) {
+    toast('Unlock the selection before editing or deleting it.');
+    return;
+  }
   drawingCanvas.cancel();
   for (const id of ids) toleranceEditor.clearDimension(state.activeId, id);
   const next = dims().filter((dimension) => !ids.has(dimension.id));
@@ -1141,6 +1354,16 @@ const commandHandlers: Record<CommandId, () => void> = {
     void saveProject();
   },
   'view-drawing': enterViewer,
+  'toggle-native-fullscreen': toggleNativeFullscreen,
+  'toggle-selection-lock': () => {
+    const dimensions = new Set(dimensionSelection.ids);
+    const annotationIds = new Set(selectedAnnotation ? [selectedAnnotation] : []);
+    const count = dimensions.size + annotationIds.size;
+    if (!count) return;
+    const locked = lockedSelectionCount() !== count;
+    if (workspaceDocument.setSelectionLocked({ dimensions, annotations: annotationIds }, locked))
+      render();
+  },
   'exit-viewer': exitViewer,
   'toggle-wake-lock': () => {
     screenAwake.setEnabled(!screenAwake.enabled);
@@ -1155,6 +1378,9 @@ const commandHandlers: Record<CommandId, () => void> = {
   'demo-dxf': () => {
     void loadDxfDemo();
   },
+  'prepare-all-drawings': () => {
+    void prepareAllDrawings();
+  },
   'export-pdf': () => {
     void exportDrawing();
   },
@@ -1168,7 +1394,11 @@ const commandHandlers: Record<CommandId, () => void> = {
             state.settings,
             undefined,
             workspaceDocument.layout(active()!),
-            { annotations: annotations(), appearance: exportAppearance },
+            {
+              annotations: annotations(),
+              appearance: exportAppearance,
+              instructions: instructions(),
+            },
           ).svg,
         ],
         { type: 'image/svg+xml' },
@@ -1205,9 +1435,11 @@ const commandHandlers: Record<CommandId, () => void> = {
     render();
   },
   'delete-selected-dimensions': () => {
-    if (selectedAnnotation)
-      changeAnnotations(annotations().filter((item) => item.id !== selectedAnnotation));
-    else deleteDimensions(new Set(dimensionSelection.ids));
+    if (dimensionSelection.ids.size) deleteDimensions(new Set(dimensionSelection.ids));
+    else if (selectedAnnotation) {
+      if (lockedSelectionCount()) toast('Unlock the selection before editing or deleting it.');
+      else changeAnnotations(annotations().filter((item) => item.id !== selectedAnnotation));
+    }
   },
   'delete-dimension': () =>
     deleteDimensions(new Set(dimensionSelection.focus ? [dimensionSelection.focus] : [])),
@@ -1241,6 +1473,10 @@ const commandHandlers: Record<CommandId, () => void> = {
   'zoom-out': () => drawingCanvas.zoomBy(1 / 1.25),
   'auto-dimensions': refreshAutomaticDimensions,
   'arrange-dimensions': () => {
+    if (state.activeId && partHasLocks(state.activeId)) {
+      toast('Unlock drawing items before changing the sheet layout.');
+      return;
+    }
     drawingCanvas.cancel();
     changeDimensions(dims(), true);
     toast('Views and dimension labels arranged. All measurements and specifications kept.');
@@ -1250,6 +1486,11 @@ const commandHandlers: Record<CommandId, () => void> = {
   'toggle-focus-mode': () => {
     focusMode = !focusMode;
     render();
+    toast(
+      focusMode
+        ? 'Focus mode is on. Panels are hidden. Use Show panels or Shift+F to return.'
+        : 'Panels restored.',
+    );
   },
   'command-palette': () => {
     contextMenu.close(false);
@@ -1258,6 +1499,7 @@ const commandHandlers: Record<CommandId, () => void> = {
   'tab:sheet': () => openInspector('sheet'),
   'tab:details': () => openInspector('details'),
   'tab:dimensions': () => openInspector('dimensions'),
+  'tab:instructions': () => openInspector('instructions'),
   'tab:annotations': () => openInspector('annotations'),
   theme: () => {
     theme = theme === 'light' ? 'dark' : 'light';
@@ -1284,13 +1526,14 @@ const commandHandlers: Record<CommandId, () => void> = {
     );
   },
   cancel: () => {
+    const preparing = busyOperation === 'prepare';
     importToken++;
     cad.reset();
     state.activeId ??= state.parts[0]?.id ?? null;
     tool = 'select';
     busy = false;
     render();
-    toast('Import cancelled.');
+    toast(preparing ? 'Drawing preparation cancelled.' : 'Import cancelled.');
   },
 };
 function runWorkspaceAction(action: string): void {
@@ -1304,6 +1547,7 @@ function runWorkspaceAction(action: string): void {
     viewerMode &&
     ![
       'exit-viewer',
+      'toggle-native-fullscreen',
       'toggle-wake-lock',
       'share-drawing',
       'capture-region',
@@ -1327,21 +1571,104 @@ function runWorkspaceAction(action: string): void {
     return;
   }
   syncSettingsFromControls();
+  if (
+    [
+      'save-project',
+      'export-pdf',
+      'export-svg',
+      'share-drawing',
+      'capture-region',
+      'prepare-all-drawings',
+    ].includes(command.id)
+  ) {
+    try {
+      flushInstructionDrafts();
+    } catch (error) {
+      toast(errorMessage(error));
+      return;
+    }
+  }
   commandHandlers[command.id]();
 }
 
 app.addEventListener('click', (event) => {
   const target = event.target as Element;
   syncSettingsFromControls();
+  const instructionAction = target.closest<HTMLElement>('[data-instructions-action]')?.dataset
+    .instructionsAction;
+  if (instructionAction && state.activeId) {
+    if (instructionAction === 'reset') {
+      instructionDrafts.delete(state.activeId);
+      refreshInspector();
+      return;
+    }
+    if (instructionAction === 'apply') {
+      try {
+        const text =
+          app.querySelector<HTMLTextAreaElement>('#manufacturing-instructions')?.value ??
+          instructionDrafts.get(state.activeId) ??
+          instructions();
+        workspaceDocument.setInstructions(state.activeId, text);
+        instructionDrafts.delete(state.activeId);
+        render();
+        toast('Manufacturing instructions saved on this part drawing.');
+      } catch (error) {
+        toast(errorMessage(error));
+      }
+      return;
+    }
+  }
   if (target.closest('#viewer-awake')) {
     screenAwake.retry();
     return;
   }
+  const annotationColor =
+    target.closest<HTMLElement>('[data-annotation-color]')?.dataset.annotationColor;
+  if (annotationColor) {
+    const input = app.querySelector<HTMLInputElement>('#annotation-color');
+    if (input) input.value = annotationColor;
+    syncAnnotationSwatches(annotationColor);
+    if (!selectedAnnotation) {
+      try {
+        Object.assign(annotationOptions, readAnnotationOptions(app, annotationOptions));
+        drawingCanvas.setAnnotationOptions(annotationOptions);
+      } catch (error) {
+        toast(errorMessage(error));
+      }
+    }
+    return;
+  }
   const annotationAction = target.closest<HTMLElement>('[data-annotation-action]')?.dataset
     .annotationAction;
+  if (annotationAction === 'lock') {
+    runWorkspaceAction('toggle-selection-lock');
+    return;
+  }
+  if (annotationAction === 'place') {
+    try {
+      const options = readAnnotationOptions(app, annotationOptions);
+      if (!options.text.trim()) throw new Error('Annotation text cannot be empty.');
+      Object.assign(annotationOptions, options);
+      selectedAnnotation = undefined;
+      setTool('text');
+      drawingCanvas.setAnnotationOptions(annotationOptions);
+      const canvas = app.querySelector<HTMLElement>('#canvas-area');
+      if (matchMedia('(max-width: 960px)').matches)
+        canvas?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      canvas?.focus({ preventScroll: true });
+      toast('Click the sheet to place your note. Escape cancels placement.');
+    } catch (error) {
+      toast(errorMessage(error));
+    }
+    return;
+  }
   if (annotationAction && selectedAnnotation) {
     const selected = annotations().find((item) => item.id === selectedAnnotation);
     if (!selected) return;
+    if (selected.locked) {
+      toast('Unlock the selection before editing or deleting it.');
+      return;
+    }
     try {
       if (annotationAction === 'delete')
         changeAnnotations(annotations().filter((item) => item.id !== selected.id));
@@ -1382,7 +1709,12 @@ app.addEventListener('click', (event) => {
   }
   const removeId = target.closest<HTMLElement>('[data-remove-part]')?.dataset.removePart;
   if (removeId) {
+    if (partHasLocks(removeId)) {
+      toast('Unlock drawing items before removing this part.');
+      return;
+    }
     toleranceEditor.clearPart(removeId);
+    instructionDrafts.delete(removeId);
     drawingCanvas.cancel();
     workspaceDocument.removePart(removeId);
     dimensionSelection.clear();
@@ -1403,6 +1735,8 @@ app.addEventListener('click', (event) => {
   const dimensionId =
     target.closest<HTMLElement>('[data-dimension-select]')?.dataset.dimensionSelect;
   if (dimensionId) {
+    selectedAnnotation = undefined;
+    workspaceMode = 'dimensions';
     dimensionSelection.select(dimensionId, event.shiftKey || event.ctrlKey || event.metaKey);
     inspectorTab = 'dimensions';
     tool = 'select';
@@ -1430,6 +1764,7 @@ app.addEventListener('change', (event) => {
     return;
   }
   if (target.dataset.annotationSetting) {
+    if (target.id === 'annotation-color') syncAnnotationSwatches(target.value);
     if (!selectedAnnotation) {
       try {
         Object.assign(annotationOptions, readAnnotationOptions(app, annotationOptions));
@@ -1448,6 +1783,8 @@ app.addEventListener('change', (event) => {
     return;
   }
   if (target.dataset.dimensionCheck) {
+    selectedAnnotation = undefined;
+    workspaceMode = 'dimensions';
     drawingCanvas.cancel();
     dimensionSelection.set(target.dataset.dimensionCheck, target.checked);
     inspectorTab = 'dimensions';
@@ -1468,6 +1805,23 @@ app.addEventListener('change', (event) => {
     if (target.value.trim() && Number.isFinite(gap) && gap >= 7 && gap <= 100) placement.gap = gap;
     else toast('Enter a minimum gap from 7 to 100 mm on paper.');
     target.value = String(placement.gap);
+    return;
+  }
+  if (target.id === 'grid-preset') {
+    if (target.value === 'custom') {
+      customGrid = true;
+      render();
+      const input = app.querySelector<HTMLInputElement>('#grid-spacing');
+      input?.focus();
+      input?.select();
+    } else {
+      const spacing = Number(target.value);
+      if (GRID_PRESETS.some((preset) => preset === spacing)) {
+        customGrid = false;
+        updateGrid({ ...grid, spacing });
+        render();
+      }
+    }
     return;
   }
   if (target.id === 'grid-spacing') {
@@ -1507,6 +1861,11 @@ app.addEventListener('change', (event) => {
   }
   const key = target.dataset.setting as keyof DrawingSettings | undefined;
   if (key) {
+    if (hasLockedItems() && ['format', 'orientation', 'template', 'scale'].includes(key)) {
+      toast('Unlock drawing items before changing the sheet layout.');
+      render();
+      return;
+    }
     (state.settings as any)[key] = controlSettingValue(target, key);
     normalizeSheetOrientation();
     cacheTitleBlock();
@@ -1582,6 +1941,10 @@ window.addEventListener('keydown', (event) => {
       captureRegion.cancel();
       return;
     }
+    if (viewerMode && document.fullscreenElement) {
+      toggleNativeFullscreen();
+      return;
+    }
     if (viewerMode) {
       exitViewer();
       return;
@@ -1602,8 +1965,9 @@ window.addEventListener('keydown', (event) => {
     }
     drawingCanvas.cancel();
     if (tool !== 'select') setTool('select');
-    else if (dimensionSelection.ids.size) {
+    else if (dimensionSelection.ids.size || selectedAnnotation) {
       dimensionSelection.clear();
+      selectedAnnotation = undefined;
       render();
     } else if (focusMode) {
       focusMode = false;
@@ -1636,8 +2000,9 @@ window.addEventListener('keyup', (event) => {
 });
 window.addEventListener('blur', () => drawingCanvas.setPanKey(false));
 document.addEventListener('visibilitychange', () => screenAwake.visibilityChanged());
+window.addEventListener('resize', measureCanvasControls);
 document.addEventListener('fullscreenchange', () => {
-  if (nativeViewerFullscreen && viewerMode && !document.fullscreenElement) exitViewer();
+  updateNativeFullscreenControl();
 });
 window.addEventListener('pagehide', () => screenAwake.setActive(false));
 window.addEventListener('pageshow', () => {
@@ -1645,7 +2010,15 @@ window.addEventListener('pageshow', () => {
 });
 app.addEventListener('input', (event) => {
   const input = event.target as HTMLInputElement;
+  if (input.id === 'manufacturing-instructions' && state.activeId) {
+    instructionDrafts.set(state.activeId, input.value);
+    const dirty = input.value !== instructions();
+    for (const button of app.querySelectorAll<HTMLButtonElement>('[data-instructions-action]'))
+      button.disabled = !dirty || busy;
+    return;
+  }
   if (input.id === 'project-description') state.description = input.value.slice(0, 10000);
+  if (input.id === 'annotation-color') syncAnnotationSwatches(input.value);
   if (input.dataset.annotationSetting && !selectedAnnotation) {
     try {
       Object.assign(annotationOptions, readAnnotationOptions(app, annotationOptions));

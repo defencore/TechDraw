@@ -1,6 +1,6 @@
 import type { Dimension, DimensionKind, ViewId } from '../model';
 import { formatDimensionLabel } from '../drawing/dimension-label';
-import { button, option } from './components';
+import { button, option, renderLockBadge } from './components';
 import { escapeHtml } from './utils';
 import { t } from './i18n';
 
@@ -58,18 +58,21 @@ export function renderDimensionResults(
   const visible = filterDimensions(dimensions, filter, precision);
   const visibleIds = new Set(visible.map((dimension) => dimension.id));
   const selectedCount = dimensions.filter((dimension) => selected.has(dimension.id)).length;
+  const lockedCount = dimensions.filter(
+    (dimension) => selected.has(dimension.id) && dimension.locked,
+  ).length;
   const hiddenSelected = dimensions.filter(
     (dimension) => selected.has(dimension.id) && !visibleIds.has(dimension.id),
   ).length;
   const filtered = filter.query.trim() || filter.view !== 'all' || filter.kind !== 'all';
-  return `<div class="dimension-browser-status" role="status"><span>${visible.length} of ${dimensions.length} dimensions${selectedCount ? ` · ${selectedCount} selected` : ''}</span>${filtered ? button('reset-dimension-filters', 'Clear filters', undefined, 'text-button') : ''}</div>
+  return `<div class="dimension-browser-status" role="status"><span>${visible.length} of ${dimensions.length} dimensions${selectedCount ? ` · ${selectedCount} selected` : ''}${lockedCount ? ` <span class="selection-lock-count">${escapeHtml(t('{count} locked', { count: lockedCount }))}</span>` : ''}</span>${filtered ? button('reset-dimension-filters', 'Clear filters', undefined, 'text-button') : ''}</div>
     ${hiddenSelected ? `<p class="dimension-filter-hidden">${hiddenSelected} selected ${hiddenSelected === 1 ? 'dimension is' : 'dimensions are'} hidden by filters. Group actions include them. ${button('reset-dimension-filters', 'Show all', undefined, 'text-button')}</p>` : ''}
     ${
       visible.length
         ? `<div class="dimension-list">${visible
             .map((dimension) => {
               const label = formatDimensionLabel(dimension, precision).plainText;
-              return `<div class="dimension-list-item${selected.has(dimension.id) ? ' selected' : ''}${dimension.id === focused ? ' focused' : ''}"><input type="checkbox" data-dimension-check="${escapeHtml(dimension.id)}" aria-label="Select ${escapeHtml(label)} ${dimension.viewId} ${dimension.kind}" ${selected.has(dimension.id) ? 'checked' : ''}/><button class="dimension-row${dimension.id === focused ? ' active' : ''}" data-dimension-select="${escapeHtml(dimension.id)}" aria-pressed="${selected.has(dimension.id)}"><span><span data-user-content>${escapeHtml(label)}</span><small>${t(dimension.viewId)} · ${t(dimension.kind)}</small></span><span class="dimension-origin" title="${dimension.automatic ? 'Automatic suggestion' : 'Manual dimension'}">${dimension.automatic ? 'A' : 'M'}</span></button></div>`;
+              return `<div class="dimension-list-item${selected.has(dimension.id) ? ' selected' : ''}${dimension.id === focused ? ' focused' : ''}"><input type="checkbox" data-dimension-check="${escapeHtml(dimension.id)}" aria-label="Select ${escapeHtml(label)} ${dimension.viewId} ${dimension.kind}" ${selected.has(dimension.id) ? 'checked' : ''}/><button class="dimension-row${dimension.id === focused ? ' active' : ''}" data-dimension-select="${escapeHtml(dimension.id)}" aria-pressed="${selected.has(dimension.id)}"><span><span data-user-content>${escapeHtml(label)}</span><small>${t(dimension.viewId)} · ${t(dimension.kind)}</small></span>${renderLockBadge(dimension.locked)}<span class="dimension-origin" title="${dimension.automatic ? 'Automatic suggestion' : 'Manual dimension'}">${dimension.automatic ? 'A' : 'M'}</span></button></div>`;
             })
             .join('')}</div>`
         : `<div class="dimension-browser-empty"><strong>${dimensions.length ? 'No matching dimensions' : 'No dimensions yet'}</strong><p>${dimensions.length ? 'Change the search, view or type, or clear filters to show the full list.' : 'Choose a dimension tool in the drawing dock to add one.'}</p></div>`

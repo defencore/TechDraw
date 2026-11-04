@@ -1,5 +1,6 @@
 /** Interface copy only. Drawing content and user-entered document data are not translated. */
 export const ukMessages: Record<string, string> = {
+  Back: 'Назад',
   'Opening project…': 'Відкриття проєкту…',
   'Multiple files supported': 'Підтримується кілька файлів',
   '2D DXF: only the source plane is shown. No 3D projections are inferred.':
@@ -259,6 +260,60 @@ export const ukMessages: Record<string, string> = {
   'Title block': 'Основний напис',
   Dimensions: 'Розміри',
   Markup: 'Позначки',
+  'Drawing mode': 'Режим роботи',
+  'Add markup': 'Додати позначки',
+  'Markup tools': 'Інструменти позначок',
+  'Notes and review marks': 'Нотатки й позначки перевірки',
+  'Choose a markup tool.': 'Виберіть інструмент позначок.',
+  'Enter your note and choose a color below.': 'Введіть нотатку й виберіть колір нижче.',
+  'Choose a color and line width below.': 'Виберіть колір і товщину лінії нижче.',
+  'Choose Place text, then click the paper.':
+    'Натисніть «Розмістити текст», потім клацніть на аркуші.',
+  'Drag on the paper to draw. Release to finish.':
+    'Малюйте на аркуші, утримуючи вказівник. Відпустіть, щоб завершити.',
+  'Drag on the paper from the start to the end.':
+    'Протягніть на аркуші від початкової до кінцевої точки.',
+  'Edit the selected mark below and choose Apply changes. Choose a tool to add another.':
+    'Змініть вибрану позначку нижче й натисніть «Застосувати зміни». Щоб додати іншу, виберіть інструмент.',
+  'Place text': 'Розмістити текст',
+  Lock: 'Заблокувати',
+  Unlock: 'Розблокувати',
+  Locked: 'Заблоковано',
+  'Lock selection': 'Заблокувати вибране',
+  'Unlock selection': 'Розблокувати вибране',
+  'Lock annotation': 'Заблокувати позначку',
+  'Select and move marks': 'Вибирати й переміщувати позначки',
+  'Unlock annotation': 'Розблокувати позначку',
+  '{count} locked': 'Заблоковано: {count}',
+  'Select dimensions or an annotation first.': 'Спочатку виберіть розміри або позначку.',
+  'Unlock the selection before editing or deleting it.':
+    'Розблокуйте вибране, перш ніж змінювати чи видаляти його.',
+  'Unlock drawing items before changing the sheet layout.':
+    'Розблокуйте елементи креслення, перш ніж змінювати компонування аркуша.',
+  'Unlock drawing items before removing this part.':
+    'Розблокуйте елементи креслення, перш ніж видаляти цю деталь.',
+  'Locked. Unlock to move, edit or delete this dimension.':
+    'Заблоковано. Розблокуйте розмір, щоб перемістити, змінити чи видалити його.',
+  'Locked. Unlock to move, edit or delete this annotation.':
+    'Заблоковано. Розблокуйте позначку, щоб перемістити, змінити чи видалити її.',
+  'Draw as many strokes as needed. Lift pen between strokes. Esc or Select finishes.':
+    'Малюйте стільки штрихів, скільки потрібно. Відривайте перо між штрихами. Esc або «Вибрати» завершує малювання.',
+  'Finish drawing': 'Завершити малювання',
+  'Click the sheet to place your note. Escape cancels placement.':
+    'Клацніть на аркуші, щоб розмістити нотатку. Escape скасовує розміщення.',
+  'Grid spacing on paper': 'Крок сітки на папері',
+  'Custom grid step': 'Власний крок сітки',
+  'Custom…': 'Власний…',
+  'Annotation color must be a six-digit hexadecimal color.':
+    'Колір позначки має бути шістнадцятковим кодом із шести цифр.',
+  'Annotation colors': 'Кольори позначок',
+  'Custom color': 'Власний колір',
+  Red: 'Червоний',
+  Amber: 'Бурштиновий',
+  Green: 'Зелений',
+  Blue: 'Синій',
+  Purple: 'Фіолетовий',
+  Gray: 'Сірий',
   Annotations: 'Позначки',
   'Drawing annotations': 'Позначки креслення',
   'Review before manufacture': 'Перевірте перед виготовленням',
@@ -537,10 +592,44 @@ export const ukMessages: Record<string, string> = {
   'No import is running.': 'Імпорт не виконується.',
   'View drawing': 'Переглянути креслення',
   'Exit viewer': 'Закрити перегляд',
+  'System fullscreen': 'Системний повноекранний режим',
+  'Exit system fullscreen': 'Вийти із системного повноекранного режиму',
+  'Back to workspace': 'Повернутися до робочої області',
+  'Toggle system fullscreen': 'Перемкнути системний повноекранний режим',
+  'System fullscreen is unavailable in this browser.':
+    'Системний повноекранний режим недоступний у цьому браузері.',
   'Keep screen awake': 'Не вимикати екран',
   'Share drawing': 'Поділитися кресленням',
   'Capture region': 'Захопити область',
   'Open markup tools': 'Відкрити інструменти позначок',
+  Instructions: 'Інструкції',
+  'Open manufacturing instructions': 'Відкрити вимоги до виготовлення',
+  'Manufacturing instructions': 'Інструкції виготовлення',
+  'One manufacturing step per line': 'Кожна вимога — з нового рядка',
+  'Included on this part drawing, PDF and project archive.':
+    'Додаються на креслення цієї деталі, у PDF та архів проєкту.',
+  'Apply instructions': 'Застосувати інструкції',
+  'Apply to preview the instructions. Saving or exporting also includes pending instructions. Undo restores the previous instructions.':
+    'Застосуйте зміни, щоб переглянути інструкції. Збереження й експорт також включають незастосовані інструкції. Скасування відновлює попередні інструкції.',
+  'Manufacturing instructions saved on this part drawing.':
+    'Вимоги до виготовлення збережено на кресленні цієї деталі.',
+  'Reset draft': 'Скинути чернетку',
+  'Locked drawing positions will be kept. Shorten the text or unlock items if it does not fit.':
+    'Заблоковані положення елементів збережуться. Якщо текст не вміщується, скоротіть його або розблокуйте елементи.',
+  'Each nonempty line becomes a numbered step. Apply changes to include them on the drawing. Undo restores the previous instructions.':
+    'Кожен непорожній рядок стає нумерованою вимогою. Застосуйте зміни, щоб додати їх на креслення. Скасування відновлює попередні вимоги.',
+  'Create drawings for all parts': 'Створити креслення всіх деталей',
+  'Drawings for all parts': 'Креслення всіх деталей',
+  'Prepare sheets for every imported part.': 'Підготувати аркуші для всіх імпортованих деталей.',
+  'Preparing drawings for all parts…': 'Підготовка креслень усіх деталей…',
+  'Drawing preparation cancelled.': 'Підготовку креслень скасовано.',
+  'Drawings are ready for all parts. Export the selected pages or save one compact project ZIP.':
+    'Креслення всіх деталей готові. Експортуйте вибрані сторінки або збережіть один компактний ZIP-архів проєкту.',
+  'Focus mode is on': 'Режим фокусування ввімкнено',
+  'Focus mode': 'Фокусування',
+  'Focus mode is on. Panels are hidden. Use Show panels or Shift+F to return.':
+    'Режим фокусування ввімкнено. Панелі приховано. Натисніть «Показати панелі» або Shift+F, щоб повернутися.',
+  'Panels restored.': 'Панелі відновлено.',
   'Add text': 'Додати текст',
   'Add arrow': 'Додати стрілку',
   'Add rectangle': 'Додати прямокутник',

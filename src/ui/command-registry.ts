@@ -18,7 +18,10 @@ export interface CommandContext {
   inspectorTab?: string;
   helpOpen?: boolean;
   viewerMode?: boolean;
+  nativeFullscreenAvailable?: boolean;
+  nativeFullscreen?: boolean;
   annotationSelection?: boolean;
+  lockedCount?: number;
   keepAwake?: boolean;
 }
 interface CommandDefinition {
@@ -92,6 +95,14 @@ export const commandDefinitions = [
     allowWhenEditing: true,
   },
   {
+    id: 'prepare-all-drawings',
+    label: 'Create drawings for all parts',
+    group: 'File',
+    icon: 'layers',
+    keywords: ['assembly', 'components', 'batch', 'sheets'],
+    disabledReason: parts,
+  },
+  {
     id: 'export-pdf',
     label: 'Export PDF',
     group: 'File',
@@ -125,6 +136,20 @@ export const commandDefinitions = [
     active: (context: CommandContext) => !!context.viewerMode,
   },
   { id: 'exit-viewer', label: 'Exit viewer', group: 'Navigation', icon: 'close', hidden: true },
+  {
+    id: 'toggle-native-fullscreen',
+    label: 'Toggle system fullscreen',
+    group: 'Navigation',
+    icon: 'expand',
+    disabledReason: (context: CommandContext) =>
+      idle(context) ??
+      (!context.viewerMode
+        ? 'Open drawing viewer first.'
+        : context.nativeFullscreenAvailable === false
+          ? 'System fullscreen is unavailable in this browser.'
+          : undefined),
+    active: (context: CommandContext) => !!context.nativeFullscreen,
+  },
   {
     id: 'toggle-wake-lock',
     label: 'Keep screen awake',
@@ -289,6 +314,19 @@ export const commandDefinitions = [
     disabledReason: selection,
   },
   {
+    id: 'toggle-selection-lock',
+    label: 'Lock selection',
+    group: 'Selection',
+    icon: 'lock',
+    keywords: ['unlock', 'protect', 'fixed', 'annotation'],
+    disabledReason: (context: CommandContext) =>
+      drawing(context) ??
+      (!context.annotationSelection && !context.selectionCount
+        ? 'Select dimensions or an annotation first.'
+        : undefined),
+    undoable: true,
+  },
+  {
     id: 'delete-selected-dimensions',
     label: 'Delete selected dimensions',
     group: 'Selection',
@@ -428,6 +466,14 @@ export const commandDefinitions = [
     active: (context: CommandContext) => context.inspectorTab === 'dimensions',
   },
   {
+    id: 'tab:instructions',
+    label: 'Open manufacturing instructions',
+    group: 'Panels',
+    icon: 'file',
+    keywords: ['notes', 'technical requirements', 'production', 'manufacture'],
+    active: (context: CommandContext) => context.inspectorTab === 'instructions',
+  },
+  {
     id: 'tab:annotations',
     label: 'Open markup tools',
     group: 'Panels',
@@ -513,6 +559,7 @@ export interface Command {
 
 const viewerCommands = new Set<string>([
   'exit-viewer',
+  'toggle-native-fullscreen',
   'toggle-wake-lock',
   'share-drawing',
   'capture-region',
@@ -540,18 +587,34 @@ export function getCommands(context: CommandContext): Command[] {
           } as Record<string, string>
         )[definition.id]
       : undefined;
+    const selectionSize = context.annotationSelection ? 1 : context.selectionCount;
+    const allLocked = selectionSize > 0 && (context.lockedCount ?? 0) >= selectionSize;
+    const changesSelection =
+      ['delete-selected-dimensions', 'delete-dimension'].includes(definition.id) ||
+      definition.id.startsWith('place-dimensions:');
     const disabledReason =
       context.viewerMode && !viewerCommands.has(definition.id)
         ? 'Exit viewer to edit the drawing.'
-        : definition.id === 'toggle-wake-lock' && !context.viewerMode
-          ? 'Open drawing viewer first.'
-          : annotationLabel
-            ? drawing(context)
-            : disabled?.(context);
+        : changesSelection && (context.lockedCount ?? 0) > 0
+          ? 'Unlock the selection before editing or deleting it.'
+          : definition.id === 'toggle-wake-lock' && !context.viewerMode
+            ? 'Open drawing viewer first.'
+            : annotationLabel
+              ? drawing(context)
+              : disabled?.(context);
     return {
       ...metadata,
-      label: t(annotationLabel ?? metadata.label),
+      label: t(
+        definition.id === 'toggle-selection-lock'
+          ? allLocked
+            ? 'Unlock selection'
+            : 'Lock selection'
+          : (annotationLabel ?? metadata.label),
+      ),
       group: t(metadata.group),
+      ...(definition.id === 'toggle-selection-lock'
+        ? { icon: allLocked ? 'unlock' : 'lock', active: allLocked }
+        : {}),
       ...(definition.id === 'exit-viewer' ? { hidden: !context.viewerMode } : {}),
       id: definition.id as CommandId,
       enabled: !disabledReason,

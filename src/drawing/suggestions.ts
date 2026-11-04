@@ -67,7 +67,28 @@ export function mergeDimensionSuggestions(
               !consumed.has(dimension.id),
           )
         : [];
-    const old = exact ?? (sameCircleGroup.length === 1 ? sameCircleGroup[0] : undefined);
+    const sameLockedRadius =
+      suggestion.kind === 'radius'
+        ? current.find(
+            (dimension) =>
+              dimension.locked &&
+              (!dimension.automatic || !consumed.has(dimension.id)) &&
+              dimension.kind === 'radius' &&
+              dimension.viewId === suggestion.viewId &&
+              coordinate(dimension.value) === coordinate(suggestion.value) &&
+              pointKey(dimension.a) === pointKey(suggestion.a),
+          )
+        : undefined;
+    const old =
+      exact ??
+      (sameCircleGroup.length === 1 ? sameCircleGroup[0] : undefined) ??
+      (sameLockedRadius?.automatic ? sameLockedRadius : undefined);
+    if (old?.locked) {
+      consumed.add(old.id);
+      updated.push(structuredClone(old));
+      continue;
+    }
+    if (sameLockedRadius) continue;
     if (manualKeys.has(measurementKey(suggestion))) {
       if (old && !hasSpecification(old)) consumed.add(old.id);
       continue;
@@ -86,9 +107,15 @@ export function mergeDimensionSuggestions(
   const protectedDimensions = current
     .filter(
       (dimension) =>
-        dimension.automatic && !consumed.has(dimension.id) && hasSpecification(dimension),
+        dimension.automatic &&
+        !consumed.has(dimension.id) &&
+        (hasSpecification(dimension) || dimension.locked),
     )
-    .map((dimension) => ({ ...structuredClone(dimension), automatic: false }));
+    .map((dimension) =>
+      dimension.locked
+        ? structuredClone(dimension)
+        : { ...structuredClone(dimension), automatic: false },
+    );
   preservedSpecifications += protectedDimensions.length;
   const dimensions = [...structuredClone(manual), ...protectedDimensions];
   const reserved = new Set(dimensions.map((dimension) => dimension.id));

@@ -49,6 +49,7 @@ const paths: Record<string, string> = {
   magic:
     '<path d="m4 19 10-10 3 3L7 22 4 19ZM11 12l3 3M18 2v4m-2-2h4M5 4v4M3 6h4M20 17v4m-2-2h4"/>',
   lock: '<rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>',
+  unlock: '<rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 7.5-2"/>',
   cube: '<path d="m12 3 9 5v9l-9 5-9-5V8l9-5Zm0 10v9M3 8l9 5 9-5M8 5l9 5"/>',
 };
 export const icon = (name: string, cls = '') =>

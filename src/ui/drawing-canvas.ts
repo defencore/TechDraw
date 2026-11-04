@@ -17,6 +17,7 @@ import { dragDimension, positionDimension } from './dimension-drag';
 import { pickDimension } from './dimension-picking';
 import { nearestPointOnEdge, pickGeometry, type GeometryPick } from './geometry-picking';
 import { drawingPage } from '../drawing/page-layout';
+import { drawingSettingsForInstructions } from '../drawing/manufacturing-instructions';
 import { dimensionGeometry } from '../drawing/dimension-geometry';
 import { annotationBounds, renderAnnotation, translateAnnotation } from '../drawing/annotations';
 import { applyDrawingAppearance, type DrawingAppearance } from '../drawing/appearance';
@@ -45,6 +46,7 @@ import {
   clampViewportZoom,
   getViewportTransform,
   panViewport,
+  preserveViewportTransform,
   resizeViewport,
   viewportSafeArea,
   toSheet,
@@ -64,6 +66,7 @@ export interface CanvasDocument {
   annotations?: DrawingAnnotation[];
   selectedAnnotation?: string;
   appearance?: DrawingAppearance;
+  instructions?: string;
 }
 interface CanvasCallbacks {
   select(id?: string, additive?: boolean): void;
@@ -81,6 +84,7 @@ interface CanvasCallbacks {
 }
 interface PointerGesture {
   pointerId: number;
+  pointerType: string;
   startClient: Point2;
   startSheet: Point2;
   moved: boolean;
@@ -181,7 +185,11 @@ export class DrawingCanvas {
       document.settings,
       this.readOnly ? undefined : document.selectedDimension,
       document.layout,
-      { annotations: document.annotations, appearance: document.appearance },
+      {
+        annotations: document.annotations,
+        appearance: document.appearance,
+        instructions: document.instructions,
+      },
     );
     const host = this.element?.querySelector<HTMLElement>('#paper-host');
     if (host) {
@@ -247,6 +255,9 @@ export class DrawingCanvas {
           getViewportTransform(this.viewport, this.metrics).scale,
         )
       : undefined;
+  }
+  refreshViewport(): void {
+    this.applyViewport();
   }
   fit(): void {
     if (this.gesture?.dimension || this.gesture?.annotation || this.gesture?.marquee || this.pinch)
@@ -387,23 +398,32 @@ export class DrawingCanvas {
       padding: 24,
       insets: { top: inset('--canvas-top'), right: 0, bottom: inset('--canvas-bottom'), left: 0 },
     };
-    const resized = Boolean(
-      resizing &&
+    const sameDimensions =
       this.metrics &&
-      (this.metrics.width !== metrics.width ||
-        this.metrics.height !== metrics.height ||
-        this.metrics.insets?.top !== metrics.insets?.top ||
-        this.metrics.insets?.bottom !== metrics.insets?.bottom),
-    );
+      this.metrics.width === metrics.width &&
+      this.metrics.height === metrics.height &&
+      this.metrics.paperWidth === metrics.paperWidth &&
+      this.metrics.paperHeight === metrics.paperHeight;
+    const insetsChanged =
+      this.metrics &&
+      (['top', 'right', 'bottom', 'left'] as const).some(
+        (side) => (this.metrics!.insets?.[side] ?? 0) !== (metrics.insets?.[side] ?? 0),
+      );
+    const resized = Boolean(this.metrics && ((resizing && !sameDimensions) || insetsChanged));
     if (resized && this.metrics) {
+      const before = getViewportTransform(this.viewport, this.metrics);
+      const next = sameDimensions
+        ? preserveViewportTransform(this.viewport, this.metrics, metrics)
+        : resizeViewport(this.viewport, this.metrics, metrics);
+      const after = getViewportTransform(next, metrics);
+      const mappingChanged = !sameDimensions || Math.abs(before.scale - after.scale) > 1e-10;
       if (
-        this.gesture?.dimension ||
-        this.gesture?.annotation ||
-        this.gesture?.marquee ||
-        this.pinch
+        this.pinch ||
+        (mappingChanged &&
+          (this.gesture?.dimension || this.gesture?.annotation || this.gesture?.marquee))
       )
         this.cancel();
-      this.viewport = resizeViewport(this.viewport, this.metrics, metrics);
+      this.viewport = next;
     }
     this.metrics = metrics;
     if (resized) this.rebasePan();
@@ -436,7 +456,9 @@ export class DrawingCanvas {
     }
     overlay.innerHTML = applyDrawingAppearance(
       renderWorkspaceGrid(
-        drawingPage(this.document.settings).content,
+        drawingPage(
+          drawingSettingsForInstructions(this.document.settings, this.document.instructions),
+        ).content,
         this.grid,
         getViewportTransform(this.viewport, this.metrics).scale,
       ),
@@ -484,8 +506,21 @@ export class DrawingCanvas {
   }
 
   private pointerDown = (event: PointerEvent): void => {
-    if (!this.enabled || !this.document || !this.metrics || !this.element || event.button > 1)
+    if (
+      !this.enabled ||
+      !this.document ||
+      !this.metrics ||
+      !this.element ||
+      event.button > 1 ||
+      (event.pointerType === 'pen' && event.button !== 0)
+    )
       return;
+    if (this.gesture?.pointerType === 'pen' && this.gesture.pointerId !== event.pointerId) {
+      event.preventDefault();
+      return;
+    }
+    // Palm contact can precede the pen tip. The pen owns the stroke from this point onward.
+    if (event.pointerType === 'pen' && (this.gesture || this.pinch)) this.cancel();
     this.pointerClient = [event.clientX, event.clientY];
     this.element.focus({ preventScroll: true });
     if (event.pointerType === 'touch') {
@@ -523,6 +558,10 @@ export class DrawingCanvas {
         return;
       }
       selected = this.selectedIds();
+      if (this.document.dimensions.some((item) => selected.has(item.id) && item.locked)) {
+        event.preventDefault();
+        return;
+      }
     }
     const pan =
       this.readOnly ||
@@ -531,7 +570,6 @@ export class DrawingCanvas {
       event.button === 1 ||
       (this.tool === 'select' && !dimension && !annotation);
     const box = this.tool === 'box-select' && !pan;
-    const sheetPoint = this.sheetPoint(event);
     let created: DrawingAnnotation | undefined;
     if (!pan && isAnnotationTool(this.tool)) {
       try {
@@ -546,9 +584,18 @@ export class DrawingCanvas {
         return;
       }
     }
-    if (annotation) this.selectAnnotation(annotation.id);
+    if (annotation) {
+      this.selectAnnotation(annotation.id);
+      if (annotation.locked) {
+        event.preventDefault();
+        return;
+      }
+    }
+    // Selection can change floating controls and refresh the screen viewport synchronously.
+    const sheetPoint = this.sheetPoint(event);
     this.gesture = {
       pointerId: event.pointerId,
+      pointerType: event.pointerType,
       startClient: [event.clientX, event.clientY],
       startSheet: sheetPoint,
       moved: false,
@@ -562,7 +609,7 @@ export class DrawingCanvas {
           ? {
               dimension: structuredClone(dimension),
               dimensions: structuredClone(
-                this.document.dimensions.filter((item) => selected.has(item.id)),
+                this.document.dimensions.filter((item) => selected.has(item.id) && !item.locked),
               ),
             }
           : box
@@ -587,6 +634,7 @@ export class DrawingCanvas {
 
   private pointerMove = (event: PointerEvent): void => {
     if (!this.enabled || !this.document || !this.metrics) return;
+    if (this.gesture?.pointerType === 'pen' && this.gesture.pointerId !== event.pointerId) return;
     this.pointerClient = [event.clientX, event.clientY];
     if (event.pointerType === 'touch' && this.touches.has(event.pointerId))
       this.touches.set(event.pointerId, this.local(event));
@@ -610,7 +658,22 @@ export class DrawingCanvas {
       const gesture = this.gesture;
       const dx = event.clientX - gesture.startClient[0],
         dy = event.clientY - gesture.startClient[1];
-      if (!gesture.moved && Math.hypot(dx, dy) < 3) return;
+      const coalescedMovement =
+        !gesture.moved &&
+        gesture.pointerType === 'pen' &&
+        gesture.creatingAnnotation &&
+        gesture.annotation?.kind === 'freehand' &&
+        typeof event.getCoalescedEvents === 'function' &&
+        event
+          .getCoalescedEvents()
+          .some(
+            (sample) =>
+              Math.hypot(
+                sample.clientX - gesture.startClient[0],
+                sample.clientY - gesture.startClient[1],
+              ) >= 3,
+          );
+      if (!gesture.moved && Math.hypot(dx, dy) < 3 && !coalescedMovement) return;
       gesture.moved = true;
       if (gesture.viewport) {
         this.viewport = panViewport(gesture.viewport, [dx, dy]);
@@ -648,6 +711,7 @@ export class DrawingCanvas {
           [id, point] = remaining;
         this.gesture = {
           pointerId: id,
+          pointerType: 'touch',
           startClient: [point[0] + rect.left, point[1] + rect.top],
           startSheet: toSheet(point, this.viewport, this.metrics),
           moved: true,
@@ -663,12 +727,27 @@ export class DrawingCanvas {
     }
     const gesture = this.gesture;
     if (!gesture || gesture.pointerId !== event.pointerId) return;
+    if (
+      gesture.pointerType === 'pen' &&
+      gesture.creatingAnnotation &&
+      gesture.annotation?.kind === 'freehand' &&
+      Math.hypot(event.clientX - gesture.startClient[0], event.clientY - gesture.startClient[1]) >=
+        3
+    )
+      gesture.moved = true;
     this.gesture = undefined;
     if (this.element?.hasPointerCapture(event.pointerId))
       this.element.releasePointerCapture(event.pointerId);
     this.element?.classList.remove('panning', 'dimension-dragging');
     this.marqueeFeedback();
     if (gesture.annotation && this.document) {
+      if (
+        gesture.annotation.locked ||
+        this.document.annotations?.some((item) => item.id === gesture.annotation!.id && item.locked)
+      ) {
+        this.restoreGesture(gesture);
+        return;
+      }
       if (gesture.moved) this.previewAnnotation(gesture, event);
       const next = gesture.annotationPreview ?? gesture.annotation;
       if (
@@ -717,6 +796,10 @@ export class DrawingCanvas {
       this.patchAnnotations();
     } else if (gesture.dimension && gesture.moved && gesture.preview) {
       this.previewDrag(gesture, event);
+      if (!gesture.preview || !gesture.previews?.length) {
+        this.restoreGesture(gesture);
+        return;
+      }
       const previews = gesture.previews ?? [gesture.preview];
       if (previews.every((dimension) => this.dimensionFits(dimension))) {
         if (previews.length > 1) this.callbacks.editMany(previews);
@@ -777,6 +860,7 @@ export class DrawingCanvas {
   private contextMenu = (event: MouseEvent): void => {
     if (!this.enabled || !this.document) return;
     event.preventDefault();
+    if ('pointerType' in event && event.pointerType === 'pen') return;
     if (this.readOnly || this.space || this.tool === 'pan' || this.gesture || this.pinch) return;
     const annotation = this.annotationAt(event);
     if (annotation) {
@@ -901,6 +985,18 @@ export class DrawingCanvas {
 
   private previewDrag(gesture: PointerGesture, event: PointerEvent): void {
     if (!gesture.dimension || !this.sheet || !this.document) return;
+    if (
+      (gesture.dimensions ?? [gesture.dimension]).some(
+        (dimension) =>
+          dimension.locked ||
+          this.document!.dimensions.some((item) => item.id === dimension.id && item.locked),
+      )
+    ) {
+      gesture.preview = undefined;
+      gesture.previews = [];
+      this.restoreGesture(gesture);
+      return;
+    }
     let current = this.sheetPoint(event);
     if (!event.altKey)
       current = snappedDragPoint(
@@ -911,14 +1007,20 @@ export class DrawingCanvas {
         this.document.settings.precision,
         this.grid,
       );
-    gesture.previews = (gesture.dimensions ?? [gesture.dimension]).map((dimension) =>
-      dragDimension(
-        dimension,
-        gesture.startSheet,
-        current,
-        this.sheet!.viewTransforms[dimension.viewId],
-      ),
-    );
+    gesture.previews = (gesture.dimensions ?? [gesture.dimension])
+      .filter(
+        (dimension) =>
+          !dimension.locked &&
+          !this.document!.dimensions.some((item) => item.id === dimension.id && item.locked),
+      )
+      .map((dimension) =>
+        dragDimension(
+          dimension,
+          gesture.startSheet,
+          current,
+          this.sheet!.viewTransforms[dimension.viewId],
+        ),
+      );
     gesture.preview = gesture.previews.find((dimension) => dimension.id === gesture.dimension!.id);
     for (const dimension of gesture.previews) this.patchDimension(dimension);
   }
@@ -941,11 +1043,25 @@ export class DrawingCanvas {
   private previewAnnotation(gesture: PointerGesture, event: PointerEvent): void {
     const original = gesture.annotation!;
     if (gesture.creatingAnnotation) {
-      const point = this.annotationPoint(event, original.kind === 'freehand');
-      gesture.annotationPreview =
-        original.kind === 'text'
-          ? { ...original, points: [point] }
-          : extendAnnotation(gesture.annotationPreview ?? original, point);
+      if (original.kind === 'freehand') {
+        const samples =
+          gesture.pointerType === 'pen' && typeof event.getCoalescedEvents === 'function'
+            ? event.getCoalescedEvents()
+            : [];
+        let preview = gesture.annotationPreview ?? original;
+        const minimumDistance = 0.5 / getViewportTransform(this.viewport, this.metrics!).scale;
+        for (const sample of [...samples, event]) {
+          if (!Number.isFinite(sample.clientX) || !Number.isFinite(sample.clientY)) continue;
+          preview = extendAnnotation(preview, this.annotationPoint(sample, true), minimumDistance);
+        }
+        gesture.annotationPreview = preview;
+      } else {
+        const point = this.annotationPoint(event);
+        gesture.annotationPreview =
+          original.kind === 'text'
+            ? { ...original, points: [point] }
+            : extendAnnotation(gesture.annotationPreview ?? original, point);
+      }
     } else {
       const point = this.sheetPoint(event);
       let delta: Point2 = [point[0] - gesture.startSheet[0], point[1] - gesture.startSheet[1]];
@@ -1082,7 +1198,9 @@ export class DrawingCanvas {
   }
   private dimensionFits(dimension: Dimension): boolean {
     if (!this.document || !this.sheet) return false;
-    const frame = drawingPage(this.document.settings).content;
+    const frame = drawingPage(
+      drawingSettingsForInstructions(this.document.settings, this.document.instructions),
+    ).content;
     const bounds = dimensionGeometry(
       dimension,
       this.sheet.viewTransforms[dimension.viewId],

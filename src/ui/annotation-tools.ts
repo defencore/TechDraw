@@ -1,5 +1,6 @@
 import type { DrawingAnnotation, Point2 } from '../model';
 import { annotationBounds } from '../drawing/annotations';
+import { annotationColor, DEFAULT_ANNOTATION_COLOR } from '../drawing/annotation-style';
 import { distanceToSegment } from './dimension-picking';
 
 export type AnnotationTool = DrawingAnnotation['kind'];
@@ -7,11 +8,13 @@ export interface AnnotationOptions {
   text: string;
   fontSize: number;
   strokeWidth: number;
+  color: string;
 }
 export const defaultAnnotationOptions: AnnotationOptions = {
   text: '',
   fontSize: 3.5,
   strokeWidth: 0.35,
+  color: DEFAULT_ANNOTATION_COLOR,
 };
 export function isAnnotationTool(tool: string): tool is AnnotationTool {
   return ['text', 'arrow', 'rectangle', 'ellipse', 'freehand'].includes(tool);
@@ -31,14 +34,14 @@ export function validateAnnotationOptions(options: AnnotationOptions): Annotatio
     throw new RangeError(
       'Use text up to 10000 characters, font size 1–100 mm and line width 0.1–10 mm.',
     );
-  return { ...options };
+  return { ...options, color: annotationColor(options.color) };
 }
 export function createAnnotation(
   tool: AnnotationTool,
   start: Point2,
   options: AnnotationOptions,
 ): DrawingAnnotation {
-  validateAnnotationOptions(options);
+  const validated = validateAnnotationOptions(options);
   if (tool === 'text' && !options.text.trim())
     throw new Error('Enter the annotation text in the annotation panel, then click to place it.');
   return {
@@ -46,15 +49,26 @@ export function createAnnotation(
     kind: tool,
     points: tool === 'text' ? [[...start]] : [[...start], [...start]],
     strokeWidth: options.strokeWidth,
+    color: validated.color,
     ...(tool === 'text' ? { text: options.text, fontSize: options.fontSize } : {}),
   };
 }
-export function extendAnnotation(annotation: DrawingAnnotation, point: Point2): DrawingAnnotation {
+export function extendAnnotation(
+  annotation: DrawingAnnotation,
+  point: Point2,
+  minimumDistance = 0.2,
+): DrawingAnnotation {
   if (annotation.kind === 'freehand') {
+    if (!Number.isFinite(minimumDistance) || minimumDistance < 0)
+      throw new RangeError('Freehand sample spacing must be a finite nonnegative distance.');
     const last = annotation.points.at(-1)!;
-    if (Math.hypot(point[0] - last[0], point[1] - last[1]) < 0.2) return annotation;
-    if (annotation.points.length >= 4096) return annotation;
-    return { ...annotation, points: [...annotation.points, [...point]] };
+    if (Math.hypot(point[0] - last[0], point[1] - last[1]) < minimumDistance) return annotation;
+    // Keep long strokes continuous within the project limit instead of freezing their endpoint.
+    const points =
+      annotation.points.length >= 4096
+        ? annotation.points.filter((_point, index) => index % 2 === 0)
+        : annotation.points;
+    return { ...annotation, points: [...points, [...point]] };
   }
   return { ...annotation, points: [annotation.points[0], [...point]] };
 }

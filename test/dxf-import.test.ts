@@ -215,6 +215,7 @@ test('2D DXF and exact dimensions survive the validated project format without f
     selected: new Set([part.id]),
     settings: { ...defaultSettings },
     annotations: {},
+    instructions: {},
     description: '',
     layouts: {},
     dimensions: {

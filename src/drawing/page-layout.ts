@@ -11,6 +11,7 @@ import type {
 import { dimensionGeometry, type ViewTransform } from './dimension-geometry';
 import { measureDimensionText } from './dimension-label';
 import { isGostTemplate } from './gost-form1';
+import { sheetNotes, type SheetNotes } from './sheet-notes';
 
 /** GOST 2.302-68 clause 2, ordered from the largest to the smallest part-drawing scale. */
 export const STANDARD_DRAWING_SCALES = [
@@ -52,6 +53,7 @@ export interface DrawingPage {
   blockHeight: number;
   content: Bounds2;
   fittingArea: Bounds2;
+  notes: SheetNotes;
 }
 export interface ProjectionMetrics {
   model: Bounds2;
@@ -84,11 +86,12 @@ export function drawingPage(settings: DrawingSettings): DrawingPage {
     blockHeight = settings.template === 'minimal' ? 35 : 55;
   const designationReserve =
     gost && settings.format !== 'A4' && settings.orientation === 'portrait' ? 14 : 0;
+  const notes = sheetNotes(settings, { width, height, left, right, top, bottom, blockHeight });
   const content: Bounds2 = {
     minX: left + 1,
     minY: top + (gost ? 15 : 1),
     maxX: width - right - 1 - designationReserve,
-    maxY: height - bottom - blockHeight - 13,
+    maxY: notes.contentBottom,
   };
   return {
     width,
@@ -98,6 +101,7 @@ export function drawingPage(settings: DrawingSettings): DrawingPage {
     top,
     bottom,
     blockHeight,
+    notes,
     content,
     fittingArea: {
       minX: left + 5,

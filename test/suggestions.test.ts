@@ -149,3 +149,51 @@ test('grouped hole specifications survive selecting a clearer representative edg
     assert.equal(refreshed.preservedSpecifications, 1);
   }
 });
+
+test('refresh retains locked automatic dimensions wholesale and keeps retired locked measurements', () => {
+  const locked: Dimension = {
+    ...linear('locked'),
+    locked: true,
+    offset: -32,
+    textOffset: [12, 4],
+    tolerance: { kind: 'fit', designation: 'H7' },
+  };
+  const retired: Dimension = { ...linear('retired', 35), locked: true, offset: 27 };
+  const current = [locked, retired];
+  const before = structuredClone(current);
+  const result = mergeDimensionSuggestions(current, [linear('fresh'), linear('new', 50)]);
+  assert.deepEqual(
+    result.dimensions.find((dimension) => dimension.id === 'locked'),
+    locked,
+  );
+  assert.deepEqual(
+    result.dimensions.find((dimension) => dimension.id === 'retired'),
+    retired,
+  );
+  assert.equal(result.dimensions.filter((dimension) => dimension.value === 80).length, 1);
+  assert.deepEqual(current, before);
+});
+
+test('locked radius callouts retain their exact attachment when a new suggestion chooses another point on the same circle', () => {
+  const locked: Dimension = {
+    id: 'radius',
+    viewId: 'front',
+    kind: 'radius',
+    a: [10, 10],
+    b: [15, 10],
+    value: 5,
+    offset: -20,
+    automatic: true,
+    locked: true,
+  };
+  const suggestion: Dimension = {
+    ...locked,
+    id: 'new-radius',
+    b: [10, 15],
+    offset: 10,
+    locked: undefined,
+  };
+  assert.deepEqual(mergeDimensionSuggestions([locked], [suggestion]).dimensions, [locked]);
+  const manual = { ...locked, automatic: false };
+  assert.deepEqual(mergeDimensionSuggestions([manual], [suggestion]).dimensions, [manual]);
+});

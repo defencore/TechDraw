@@ -12,6 +12,7 @@ export interface PdfPage {
   layout?: DrawingLayout;
   annotations?: DrawingAnnotation[];
   appearance?: DrawingAppearance;
+  instructions?: string;
 }
 
 let fontData: Promise<string> | undefined;
@@ -68,6 +69,7 @@ export async function exportPdf(pages: PdfPage[], filename = 'techdraw.pdf'): Pr
     renderDrawing(p.part, p.dimensions, p.settings, undefined, p.layout, {
       annotations: p.annotations,
       appearance: p.appearance,
+      instructions: p.instructions,
     }),
   );
   if (rendered.some((p) => p.warnings.some((w) => w.startsWith('GOST 2.104-68 requires A4'))))
@@ -76,7 +78,7 @@ export async function exportPdf(pages: PdfPage[], filename = 'techdraw.pdf'): Pr
     );
   if (rendered.some((p) => p.warnings.some((w) => w.includes('technical note lines do not fit'))))
     throw new Error(
-      'Technical notes do not fit on the sheet. Shorten the notes or choose a wider sheet before exporting.',
+      'Technical notes do not fit on the sheet. Shorten the notes or choose a larger sheet before exporting.',
     );
   if (
     rendered.some((p) =>

@@ -6,6 +6,7 @@ import { SourceRepository } from '../src/io/source-repository';
 import { importDxf } from '../src/io/dxf-import';
 import type { DrawingAnnotation } from '../src/model';
 import { defaultSettings } from '../src/state';
+import { DEFAULT_ANNOTATION_COLOR } from '../src/drawing/annotation-style';
 
 function workspace() {
   const bytes = strToU8(
@@ -23,6 +24,8 @@ function workspace() {
       text: 'Перевірити посадку',
       strokeWidth: 0.3,
       fontSize: 4,
+      color: '#5b8def',
+      locked: true,
     },
     {
       id: 'arrow',
@@ -32,6 +35,7 @@ function workspace() {
         [60, 70],
       ],
       strokeWidth: 0.3,
+      color: DEFAULT_ANNOTATION_COLOR,
     },
   ];
   const state = {
@@ -41,6 +45,9 @@ function workspace() {
     settings: { ...defaultSettings, title: 'Manufacturing drawing' },
     layouts: {},
     annotations: { [part.id]: annotations },
+    instructions: {
+      [part.id]: 'Deburr all edges. Inspect the two mounting holes before assembly.',
+    },
     dimensions: {
       [part.id]: [
         {
@@ -53,6 +60,7 @@ function workspace() {
           offset: 15,
           automatic: false,
           tolerance: { kind: 'symmetric' as const, magnitude: '0.050' },
+          locked: true,
         },
       ],
     },
@@ -79,6 +87,15 @@ test('ZIP reopens original bytes, exact tolerances, annotations, description and
   );
   assert.equal(opened.project.dimensions[state.parts[0].id][0].tolerance?.kind, 'symmetric');
   assert.equal(opened.description, state.description);
+  assert.equal(
+    opened.project.instructions[state.parts[0].id],
+    state.instructions[state.parts[0].id],
+  );
+  assert.equal(opened.project.parts[0].unit, 'mm');
+  assert.deepEqual(opened.project.parts[0].bounds, state.parts[0].bounds);
+  assert.equal(opened.project.annotations[state.parts[0].id][0].color, '#5b8def');
+  assert.equal(opened.project.annotations[state.parts[0].id][0].locked, true);
+  assert.equal(opened.project.dimensions[state.parts[0].id][0].locked, true);
   assert.deepEqual(opened.missingSources, []);
   assert.deepEqual(state, before);
 });
@@ -140,4 +157,35 @@ test('unsafe, oversized and unexpected archive entries reject before workspace r
       break;
     }
   await assert.rejects(openProjectArchive(oversized), /size limits/);
+});
+
+test('archive loading normalizes colorless marks and validates color even when the project digest is valid', async () => {
+  const { state, sources, bytes } = workspace();
+  const archive = await createProjectArchive(state, sources.all());
+  const rewriteColor = async (color?: string) => {
+    const files = unzipSync(archive);
+    const project = JSON.parse(strFromU8(files['project.json']));
+    if (color === undefined) delete project.annotations[state.parts[0].id][0].color;
+    else project.annotations[state.parts[0].id][0].color = color;
+    files['project.json'] = strToU8(JSON.stringify(project));
+    const manifest = JSON.parse(strFromU8(files['manifest.json']));
+    manifest.project.size = files['project.json'].length;
+    manifest.project.sha256 = [
+      ...new Uint8Array(
+        await crypto.subtle.digest('SHA-256', new Uint8Array(files['project.json']).buffer),
+      ),
+    ]
+      .map((value) => value.toString(16).padStart(2, '0'))
+      .join('');
+    files['manifest.json'] = strToU8(JSON.stringify(manifest));
+    return zipSync(files);
+  };
+  const opened = await openProjectArchive(await rewriteColor());
+  assert.equal(opened.project.annotations[state.parts[0].id][0].color, DEFAULT_ANNOTATION_COLOR);
+  assert.deepEqual(opened.sources[0].bytes, bytes);
+  assert.equal(opened.description, state.description);
+  await assert.rejects(
+    openProjectArchive(await rewriteColor('url(javascript:alert(1))')),
+    /annotation color/,
+  );
 });

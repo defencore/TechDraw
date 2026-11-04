@@ -34,71 +34,205 @@
 }
 .workshop-viewer .canvas-shell {
   height: 100%;
-  --canvas-top: 76px;
-  --canvas-bottom: 56px;
+  /* Viewport math reads these pixel values independently of the fixed controls. */
+  --canvas-top: 86px;
+  --canvas-bottom: 80px;
   border: 0;
 }
 .viewer-controls {
   position: fixed;
   z-index: 45;
-  top: max(10px, env(safe-area-inset-top));
-  left: max(10px, env(safe-area-inset-left));
-  right: max(10px, env(safe-area-inset-right));
-  display: flex;
+  top: max(12px, env(safe-area-inset-top, 0px));
+  left: max(12px, env(safe-area-inset-left, 0px));
+  right: max(12px, env(safe-area-inset-right, 0px));
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) 136px 44px 188px 44px 44px;
+  grid-template-areas: 'back part appearance wake status copy fullscreen';
   align-items: center;
-  gap: 10px;
-  padding: 9px 12px;
+  gap: 8px;
+  max-width: 1080px;
+  margin-inline: auto;
+  padding: 8px;
   border: 1px solid var(--border);
-  border-radius: 13px;
-  background: color-mix(in srgb, var(--surface) 94%, transparent);
-  box-shadow: var(--shadow);
-  backdrop-filter: blur(12px);
+  border-radius: 18px;
+  color: var(--ink);
+  background: var(--surface);
+  background: color-mix(in srgb, var(--surface) 96%, transparent);
+  box-shadow:
+    0 4px 14px #102a4612,
+    0 12px 35px #102a4612;
+  backdrop-filter: blur(18px) saturate(1.2);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+  isolation: isolate;
+}
+:root[data-theme='dark'] .viewer-controls {
+  box-shadow:
+    0 4px 14px #0003,
+    0 12px 35px #0002;
+}
+.viewer-controls label {
+  position: relative;
+  display: block;
+  min-width: 0;
+  margin: 0;
+}
+.viewer-controls label::after {
+  content: '';
+  position: absolute;
+  top: 18px;
+  right: 15px;
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid var(--muted);
+  border-bottom: 1.5px solid var(--muted);
+  transform: rotate(45deg);
+  pointer-events: none;
 }
 .viewer-controls .viewer-part {
-  flex: 1;
-  min-width: 0;
-  max-width: 420px;
+  grid-area: part;
 }
 .viewer-controls select {
+  display: block;
   width: 100%;
+  min-width: 0;
+  height: 44px;
   min-height: 44px;
+  margin: 0;
+  padding: 0 36px 0 13px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  appearance: none;
+  -webkit-appearance: none;
+  background: var(--surface-subtle);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 550;
+  line-height: normal;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition:
+    border-color 0.15s,
+    background 0.15s;
+}
+.viewer-controls select:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+.viewer-controls select:focus-visible {
+  border-color: var(--accent);
+  outline-offset: 2px;
+}
+.viewer-controls option {
+  background: var(--surface);
+  color: var(--ink);
 }
 .viewer-controls button {
-  min-width: 44px;
-  min-height: 44px;
-}
-.viewer-awake {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  justify-content: center;
+  gap: 8px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  margin: 0;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-subtle);
+  color: var(--ink);
   font-size: 12px;
+  font-weight: 550;
+  line-height: 1.3;
+  touch-action: manipulation;
+}
+.viewer-controls button:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+  background: var(--accent-soft);
+}
+.viewer-controls button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.viewer-controls button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.viewer-controls button > .icon {
+  width: 18px;
+  height: 18px;
+}
+.viewer-controls [data-action='toggle-wake-lock'] {
+  grid-area: wake;
+  padding: 0;
+}
+.viewer-controls [data-action='toggle-wake-lock'][aria-pressed='true'] {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  background: var(--accent-soft);
+}
+.viewer-controls [data-action='share-drawing'] {
+  grid-area: copy;
+  padding: 0;
+}
+.viewer-controls .viewer-fullscreen {
+  grid-area: fullscreen;
+  padding: 0;
+}
+.viewer-controls .viewer-fullscreen[aria-pressed='true'] {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  background: var(--accent-soft);
+}
+.viewer-controls .viewer-awake {
+  grid-area: status;
+  position: relative;
+  display: block;
+  min-width: 0;
+  width: 188px;
+  overflow: hidden;
+  padding: 0 11px 0 27px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 42px;
+  text-align: left;
   color: var(--muted);
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .viewer-awake::before {
   content: '';
+  position: absolute;
+  left: 11px;
+  top: 18px;
   width: 7px;
   height: 7px;
   border-radius: 50%;
   background: var(--muted);
 }
 .viewer-awake[data-status='active']::before {
-  background: #53d9a2;
-  box-shadow: 0 0 0 4px #53d9a219;
+  background: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-soft);
 }
 .viewer-awake[data-status='unavailable']::before,
 .viewer-awake[data-status='paused']::before {
-  background: #e1b761;
+  background: #d9a449;
 }
 .viewer-controls .viewer-appearance {
-  max-width: 135px;
+  grid-area: appearance;
 }
 .viewer-controls .viewer-exit {
-  margin-left: auto;
+  grid-area: back;
+  max-width: 200px;
+  padding-inline: 13px;
+}
+.viewer-controls .viewer-exit span {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .workshop-viewer .viewport-dock {
   position: fixed;
-  bottom: max(12px, env(safe-area-inset-bottom));
-  right: max(12px, env(safe-area-inset-right));
+  bottom: max(12px, env(safe-area-inset-bottom, 0px));
+  right: max(12px, env(safe-area-inset-right, 0px));
   z-index: 46;
 }
 .project-notes {
@@ -160,28 +294,36 @@
   .files-panel .project-notes summary {
     min-height: 28px;
   }
+}
+@media (max-width: 1000px) {
   .viewer-controls {
-    flex-wrap: wrap;
-    gap: 5px;
-    padding: 7px;
+    grid-template-columns: 44px minmax(108px, 1fr) minmax(0, 1fr) 44px 44px;
+    grid-template-areas: 'back part part copy fullscreen' 'wake appearance status status status';
+    gap: 6px;
+    max-width: 700px;
   }
-  .viewer-controls .viewer-part {
-    flex: 1 1 160px;
-  }
-  .viewer-awake {
-    order: 4;
-    flex: 1 1 150px;
-    padding: 4px;
-    font-size: 11px;
-  }
-  .viewer-controls .viewer-appearance {
-    width: 110px;
-    max-width: 110px;
+  .viewer-controls .viewer-exit {
+    width: 44px;
+    padding: 0;
   }
   .viewer-controls .viewer-exit span {
     display: none;
   }
+  .viewer-controls .viewer-awake {
+    width: 100%;
+  }
   .workshop-viewer .canvas-shell {
-    --canvas-top: 126px;
+    --canvas-top: 136px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .viewer-controls button,
+  .viewer-controls select {
+    transition: none;
+  }
+}
+@media print {
+  .viewer-controls {
+    display: none !important;
   }
 }

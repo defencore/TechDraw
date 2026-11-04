@@ -19,6 +19,7 @@ export interface WorkspaceState {
   activeId: string | null;
   dimensions: Record<string, Dimension[]>;
   annotations: Record<string, DrawingAnnotation[]>;
+  instructions: Record<string, string>;
   layouts: Record<string, DrawingLayout>;
   settings: DrawingSettings;
 }
@@ -26,6 +27,7 @@ export interface DimensionSnapshot {
   dimensions: Dimension[];
   annotations?: DrawingAnnotation[];
   layout?: DrawingLayout;
+  instructions?: string;
 }
 
 /** Dimensions, review annotations and sheet layout form one reversible editing operation. */

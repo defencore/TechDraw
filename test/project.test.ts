@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import type { DrawingAnnotation, DrawingLayout, Part, Projection } from '../src/model';
 import { parseProject, serializeProject } from '../src/project';
 import { defaultSettings, type WorkspaceState } from '../src/state';
+import { DEFAULT_ANNOTATION_COLOR } from '../src/drawing/annotation-style';
 
 function workspace(): WorkspaceState {
   const views: Projection[] = (['front', 'top', 'right', 'iso'] as const).map((id) => ({
@@ -43,6 +44,7 @@ function workspace(): WorkspaceState {
     selected: new Set([part.id]),
     settings: { ...defaultSettings },
     annotations: {},
+    instructions: {},
     description: '',
     layouts: {},
     dimensions: {
@@ -406,6 +408,7 @@ test('paper annotations and project descriptions roundtrip through fresh whiteli
     text: 'Inspect Ø6 😀',
     strokeWidth: 0.3,
     fontSize: 4,
+    color: DEFAULT_ANNOTATION_COLOR,
   };
   state.annotations['part-1'] = [note];
   const parsed = parseProject(serializeProject(state));
@@ -460,4 +463,130 @@ test('malformed or orphan annotations and invalid XML text are rejected before r
     mutate(data);
     assert.throws(() => parseProject(JSON.stringify(data)), /Invalid project/);
   }
+});
+
+test('annotation colors canonicalize six-digit hex and absent archived colors become the shared review color', () => {
+  const state = workspace();
+  const note: DrawingAnnotation = {
+    id: 'colored',
+    kind: 'text',
+    points: [[25, 40]],
+    text: 'Review fit',
+    strokeWidth: 0.3,
+    fontSize: 4,
+    color: '#5B8DEF',
+  };
+  state.annotations['part-1'] = [note];
+  const data = JSON.parse(serializeProject(state));
+  const parsed = parseProject(JSON.stringify(data));
+  assert.equal(parsed.annotations['part-1'][0].color, '#5b8def');
+  assert.equal(note.color, '#5B8DEF', 'normalization cannot mutate the live document');
+  delete data.annotations['part-1'][0].color;
+  const normalized = parseProject(JSON.stringify(data)).annotations['part-1'][0];
+  assert.equal(normalized.color, DEFAULT_ANNOTATION_COLOR);
+  const { color: normalizedColor, ...geometry } = normalized;
+  const { color: inputColor, ...original } = note;
+  assert.deepEqual(geometry, original);
+});
+
+test('annotation colors reject CSS names, alpha, shorthand and injection strings', () => {
+  const state = workspace();
+  state.annotations['part-1'] = [
+    { id: 'note', kind: 'text', points: [[20, 30]], text: 'Inspect', strokeWidth: 0.3 },
+  ];
+  const base = JSON.parse(serializeProject(state));
+  for (const color of [
+    'red',
+    '#abc',
+    '#abcdef80',
+    ' #abcdef',
+    '#abcdef ',
+    'rgb(0,0,0)',
+    'url(javascript:alert(1))',
+    '#fff\" onload=\"x',
+    '#12345g',
+    '',
+    null,
+    123456,
+    {},
+  ]) {
+    const data = structuredClone(base);
+    data.annotations['part-1'][0].color = color;
+    assert.throws(() => parseProject(JSON.stringify(data)), /annotation color/);
+  }
+});
+
+test('dimension and review lock flags roundtrip as strict optional booleans', () => {
+  const state = workspace();
+  state.dimensions['part-1'][0].locked = true;
+  state.annotations['part-1'] = [
+    {
+      id: 'note',
+      kind: 'text',
+      points: [[20, 30]],
+      text: 'Keep in place',
+      strokeWidth: 0.3,
+      color: '#2678d4',
+      locked: true,
+    },
+  ];
+  const parsed = parseProject(serializeProject(state));
+  assert.equal(parsed.dimensions['part-1'][0].locked, true);
+  assert.equal(parsed.annotations['part-1'][0].locked, true);
+  assert.equal(parsed.annotations['part-1'][0].color, '#2678d4');
+  const base = JSON.parse(serializeProject(state));
+  for (const locked of ['true', 'false', 1, 0, null, {}, []])
+    for (const kind of ['dimensions', 'annotations']) {
+      const data = structuredClone(base);
+      data[kind]['part-1'][0].locked = locked;
+      assert.throws(() => parseProject(JSON.stringify(data)), /locked flag/);
+    }
+  base.dimensions['part-1'][0].locked = false;
+  base.annotations['part-1'][0].locked = false;
+  assert.equal(parseProject(JSON.stringify(base)).annotations['part-1'][0].locked, false);
+  delete base.dimensions['part-1'][0].locked;
+  delete base.annotations['part-1'][0].locked;
+  assert.equal(parseProject(JSON.stringify(base)).annotations['part-1'][0].locked, undefined);
+});
+
+test('manufacturing instructions are per-part document data with normalized missing entries', () => {
+  const state = workspace();
+  state.instructions['part-1'] = 'Deburr sharp edges.\nПеревірити посадку Ø6 😀';
+  const parsed = parseProject(serializeProject(state));
+  assert.equal(parsed.instructions['part-1'], state.instructions['part-1']);
+  assert.notEqual(parsed.instructions, state.instructions);
+  assert.equal(
+    parsed.settings.notes,
+    state.settings.notes,
+    'instructions cannot overwrite cached global drawing notes',
+  );
+  const data = JSON.parse(serializeProject(state));
+  delete data.instructions;
+  assert.deepEqual(Object.entries(parseProject(JSON.stringify(data)).instructions), [
+    ['part-1', ''],
+  ]);
+  data.instructions = {};
+  assert.equal(parseProject(JSON.stringify(data)).instructions['part-1'], '');
+});
+
+test('manufacturing instructions reject unknown parts, nontext, oversized values and malformed Unicode', () => {
+  const base = source();
+  for (const value of [
+    null,
+    1,
+    false,
+    [],
+    {},
+    'x'.repeat(20001),
+    '\uD800',
+    '\uFFFF',
+    'text\u0001',
+  ]) {
+    const data = structuredClone(base);
+    data.instructions = { 'part-1': value };
+    assert.throws(() => parseProject(JSON.stringify(data)), /manufacturing instructions/);
+  }
+  const unknown = structuredClone(base);
+  unknown.instructions = { orphan: 'Machine this part.' };
+  assert.throws(() => parseProject(JSON.stringify(unknown)), /unknown part/);
 });

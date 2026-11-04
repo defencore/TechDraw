@@ -2,6 +2,7 @@ import type { WorkspaceState } from '../state';
 import type { Part, ViewId } from '../model';
 import { button, option } from './components';
 import { icon } from './icons';
+import { t } from './i18n';
 import { escapeHtml as e } from './utils';
 import { renderTitleBlockEditor } from './title-block-editor';
 import { renderDimensionEditor } from './dimension-editor';
@@ -22,6 +23,8 @@ interface ViewContext {
   autoDetail: 'balanced' | 'full';
   collapsedBranches: Set<string>;
   annotationPanel?: string;
+  instructionsPanel?: string;
+  hasLockedItems?: boolean;
 }
 
 export function createWorkspaceViews({
@@ -34,6 +37,8 @@ export function createWorkspaceViews({
   autoDetail,
   collapsedBranches,
   annotationPanel,
+  instructionsPanel,
+  hasLockedItems = false,
 }: ViewContext) {
   const active = () => state.parts.find((p) => p.id === state.activeId);
   const dims = () => (state.activeId ? (state.dimensions[state.activeId] ?? []) : []);
@@ -61,16 +66,23 @@ export function createWorkspaceViews({
     if (!state.parts.length)
       return `<div class="empty-files">${icon('layers')}<p>Your parts will appear here.</p><span>Import a STEP or DXF file or try an example.</span></div>`;
     const sources = [...new Set(state.parts.map((p) => p.sourceName))];
-    return sources
-      .map(
-        (source) =>
-          `<section class="source-group"><div class="source-name" title="${e(source)}">${icon('file')}${e(source)}</div>${assemblyTree(
-            state.parts.filter((p) => p.sourceName === source),
-            1,
-            source,
-          )}</section>`,
-      )
-      .join('');
+    const drawingsAction =
+      state.parts.length > 1
+        ? `<div class="parts-drawing-action">${button('prepare-all-drawings', 'Drawings for all parts', 'layers', 'secondary compact')}<p>Prepare sheets for every imported part.</p></div>`
+        : '';
+    return (
+      drawingsAction +
+      sources
+        .map(
+          (source) =>
+            `<section class="source-group"><div class="source-name" title="${e(source)}">${icon('file')}${e(source)}</div>${assemblyTree(
+              state.parts.filter((p) => p.sourceName === source),
+              1,
+              source,
+            )}</section>`,
+        )
+        .join('')
+    );
   }
 
   function renderEmpty(): string {
@@ -81,16 +93,23 @@ export function createWorkspaceViews({
     const s = state.settings,
       part = active(),
       dimension = dims().find((d) => d.id === selectedDimension);
+    const layoutDisabled = hasLockedItems ? ' disabled' : '';
     const scales: number[] = [...STANDARD_DRAWING_SCALES];
     if (typeof s.scale === 'number' && !scales.includes(s.scale)) scales.push(s.scale);
     scales.sort((a, b) => a - b);
     if (inspectorTab === 'sheet')
-      return `<div class="section-label">PAGE SETUP</div><div class="field-row"><label class="field"><span>Format</span><select data-setting="format">${['A4', 'A3', 'A2', 'A1'].map((x) => option(x, x, s.format)).join('')}</select></label><label class="field"><span>Orientation</span><select data-setting="orientation">${s.format === 'A4' && (s.template === 'eskd' || s.template === 'eskd-uk') ? '<option value="landscape" disabled>Landscape (use ISO or Minimal)</option>' : option('landscape', 'Landscape', s.orientation)}${option('portrait', 'Portrait', s.orientation)}</select></label></div><label class="field"><span>Drawing template</span><select data-setting="template">${option('eskd', 'ESKD · GOST 2.104-68 · English', s.template)}${option('eskd-uk', 'ESKD · GOST 2.104-68 · Ukrainian', s.template)}${option('iso', 'ISO style', s.template)}${option('minimal', 'Minimal', s.template)}</select></label><p class="field-help">${part?.sourceKind === 'dxf' ? '2D drawing from DXF. No depth or additional projections are inferred. Drawing scale controls printed size; Zoom inspects details.' : 'First-angle projection. ESKD templates use Form 1 (185 × 55 mm) with 20 mm left and 5 mm other frame margins. Use A4 portrait for the standard A4 arrangement. Drawing scale controls printed size; Zoom inspects details.'}</p><div class="field-row"><label class="field"><span>Drawing scale</span><select data-setting="scale">${option('auto', 'Auto fit', s.scale)}${scales.map((x) => option(x, x >= 1 ? `${x}:1` : `1:${+(1 / x).toFixed(3)}`, s.scale)).join('')}</select></label><label class="field"><span>Decimal places</span><select data-setting="precision">${[0, 1, 2, 3, 4, 5, 6].map((x) => option(x, String(x), s.precision)).join('')}</select></label></div><div class="inspector-rule"></div><div class="section-label">DISPLAY</div><label class="switch-row"><span>Hidden edges</span><input type="checkbox" data-setting="hiddenLines" ${s.hiddenLines ? 'checked' : ''}/></label><label class="switch-row"><span>Center lines</span><input type="checkbox" data-setting="centerLines" ${s.centerLines ? 'checked' : ''}/></label><label class="field"><span>Automatic dimension detail</span><select id="auto-detail">${option('balanced', 'Balanced', autoDetail)}${option('full', 'All baseline coordinates', autoDetail)}</select></label><p class="field-help">Refreshes automatic suggestions while keeping manual dimensions and specifications. Undo restores the previous set.</p><div class="inspector-rule"></div><div class="section-label">CURRENT SHEET</div><div id="sheet-stats" class="sheet-stats">${part ? 'Generating layout…' : 'Import a part to create a sheet.'}</div><p class="field-help">One selected part per PDF page. Use the checkboxes in the parts list to create a drawing set.</p>`;
+      return `<div class="section-label">PAGE SETUP</div>${hasLockedItems ? '<p class="locked-item-notice">Unlock drawing items before changing the sheet layout.</p>' : ''}<div class="field-row"><label class="field"><span>Format</span><select data-setting="format"${layoutDisabled}>${['A4', 'A3', 'A2', 'A1'].map((x) => option(x, x, s.format)).join('')}</select></label><label class="field"><span>Orientation</span><select data-setting="orientation"${layoutDisabled}>${s.format === 'A4' && (s.template === 'eskd' || s.template === 'eskd-uk') ? '<option value="landscape" disabled>Landscape (use ISO or Minimal)</option>' : option('landscape', 'Landscape', s.orientation)}${option('portrait', 'Portrait', s.orientation)}</select></label></div><label class="field"><span>Drawing template</span><select data-setting="template"${layoutDisabled}>${option('eskd', 'ESKD · GOST 2.104-68 · English', s.template)}${option('eskd-uk', 'ESKD · GOST 2.104-68 · Ukrainian', s.template)}${option('iso', 'ISO style', s.template)}${option('minimal', 'Minimal', s.template)}</select></label><p class="field-help">${part?.sourceKind === 'dxf' ? '2D drawing from DXF. No depth or additional projections are inferred. Drawing scale controls printed size; Zoom inspects details.' : 'First-angle projection. ESKD templates use Form 1 (185 × 55 mm) with 20 mm left and 5 mm other frame margins. Use A4 portrait for the standard A4 arrangement. Drawing scale controls printed size; Zoom inspects details.'}</p><div class="field-row"><label class="field"><span>Drawing scale</span><select data-setting="scale"${layoutDisabled}>${option('auto', 'Auto fit', s.scale)}${scales.map((x) => option(x, x >= 1 ? `${x}:1` : `1:${+(1 / x).toFixed(3)}`, s.scale)).join('')}</select></label><label class="field"><span>Decimal places</span><select data-setting="precision">${[0, 1, 2, 3, 4, 5, 6].map((x) => option(x, String(x), s.precision)).join('')}</select></label></div><div class="inspector-rule"></div><div class="section-label">DISPLAY</div><label class="switch-row"><span>Hidden edges</span><input type="checkbox" data-setting="hiddenLines" ${s.hiddenLines ? 'checked' : ''}/></label><label class="switch-row"><span>Center lines</span><input type="checkbox" data-setting="centerLines" ${s.centerLines ? 'checked' : ''}/></label><label class="field"><span>Automatic dimension detail</span><select id="auto-detail">${option('balanced', 'Balanced', autoDetail)}${option('full', 'All baseline coordinates', autoDetail)}</select></label><p class="field-help">Refreshes automatic suggestions while keeping manual dimensions and specifications. Undo restores the previous set.</p><div class="inspector-rule"></div><div class="section-label">CURRENT SHEET</div><div id="sheet-stats" class="sheet-stats">${part ? 'Generating layout…' : 'Import a part to create a sheet.'}</div><p class="field-help">One selected part per PDF page. Use the checkboxes in the parts list to create a drawing set.</p>`;
     if (inspectorTab === 'details')
       return `${renderTitleBlockEditor(s, part?.name)}${part?.sourceNotes?.length ? `<details class="source-notes"><summary>DXF source notes</summary><p class="field-help">DXF notes are reference text from the source file, not measured geometry.</p>${part.sourceNotes.map((note) => `<p data-user-content>${e(note)}</p>`).join('')}</details>` : ''}${part?.warnings.length ? `<div class="geometry-note"><strong>Import notes</strong>${part.warnings.map((w) => `<p>${e(w)}</p>`).join('')}</div>` : ''}`;
     if (inspectorTab === 'annotations') return annotationPanel ?? '';
+    if (inspectorTab === 'instructions') return instructionsPanel ?? '';
     const selectedCount = dims().filter((item) => selectedDimensionIds.has(item.id)).length;
-    const editor = dimension ? renderDimensionEditor(dimension, s.precision) : '';
+    const lockedCount = dims().filter(
+      (item) => selectedDimensionIds.has(item.id) && item.locked,
+    ).length;
+    const editor = dimension
+      ? renderDimensionEditor(dimension, s.precision, { count: selectedCount, lockedCount })
+      : '';
     const availableViews = part?.views
       .filter((view) => view.id !== 'iso')
       .map((view) => view.id as Exclude<ViewId, 'iso'>) ?? ['front', 'top', 'right'];
@@ -114,7 +133,7 @@ export function createWorkspaceViews({
     if (!selectedCount)
       return `<p class="dimension-selection-tip">Select a dimension on the sheet to edit it, or use the list below. Checkboxes and Shift / Ctrl-click build a group.</p>${warning}${browser}${arrangement}${help}`;
     if (selectedCount === 1) return `${editor}${arrangement}${warning}${browser}${help}`;
-    return `<div class="dimension-selection-summary"><div><strong>${selectedCount} dimensions selected</strong><p class="field-help">Drag a selected dimension to move the group, or arrange it by side.</p></div>${button('clear-dimension-selection', 'Clear', undefined, 'text-button', 'aria-label="Clear dimension selection"')}</div>${arrangement}${warning}${browser}${editor ? `<details class="focused-dimension-editor"><summary>Edit focused dimension</summary>${editor}</details>` : ''}${help}`;
+    return `<div class="dimension-selection-summary"><div><strong>${selectedCount} dimensions selected</strong>${lockedCount ? `<p class="selection-lock-count">${e(t('{count} locked', { count: lockedCount }))}</p>` : '<p class="field-help">Drag a selected dimension to move the group, or arrange it by side.</p>'}</div>${button('clear-dimension-selection', 'Clear', undefined, 'text-button', 'aria-label="Clear dimension selection"')}</div>${arrangement}${warning}${browser}${editor ? `<details class="focused-dimension-editor"><summary>Edit focused dimension</summary>${editor}</details>` : ''}${help}`;
   }
 
   function renderHelp(): string {

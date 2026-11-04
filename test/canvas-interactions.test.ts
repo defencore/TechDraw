@@ -407,6 +407,11 @@ test('selection focus reads floating control insets and keeps complete annotatio
     },
   });
   try {
+    const originalScreen = host.transform();
+    canvas.refreshViewport();
+    near(host.transform().x, originalScreen.x);
+    near(host.transform().y, originalScreen.y);
+    near(host.transform().scale, originalScreen.scale);
     canvas.fit();
     const fitted = host.transform();
     near(fitted.y + (sheet.height / 2) * fitted.scale, 100 + (host.clientHeight - 146) / 2);
@@ -575,6 +580,49 @@ test('group selection preserves a plain-clicked member and modifier removal neve
   assert.equal(edited.length + groups.length, 0);
 });
 
+test('locked dimensions stay selectable and a mixed locked group cannot move any member', () => {
+  for (const hit of ['one', 'two']) {
+    const dimensions = [{ ...annotation('one', 10), locked: true }, annotation('two', 16)];
+    const { canvas, host, selections, edited, groups } = fixture(dimensions, ['one', 'two']);
+    const picker = annotationPicker(canvas);
+    picker.pick(hit);
+    const before = host.transform();
+    host.dispatch('pointerdown');
+    assert.deepEqual(selections.at(-1), { id: hit, additive: false });
+    assert.equal(host.captured.size, 0);
+    host.dispatch('pointermove', { clientX: 240, clientY: 230 });
+    host.dispatch('pointerup', { clientX: 240, clientY: 230 });
+    assert.equal(edited.length + groups.length, 0);
+    assert.deepEqual(host.transform(), before);
+    assert.deepEqual(dimensions[0], { ...annotation('one', 10), locked: true });
+  }
+});
+
+test('locked review annotations can be focused and copied without accidental dragging or panning', () => {
+  const note: DrawingAnnotation = {
+    id: 'locked-note',
+    kind: 'text',
+    points: [[30, 40]],
+    text: 'Approved note',
+    color: '#2678d4',
+    fontSize: 4,
+    strokeWidth: 0.35,
+    locked: true,
+  };
+  const { canvas, host, client, editedAnnotations, annotationSelections } = fixture([], [], [note]);
+  const before = host.transform(),
+    start = client([31, 39]);
+  host.dispatch('pointerdown', { clientX: start[0], clientY: start[1] });
+  assert.equal(annotationSelections.at(-1), note.id);
+  host.dispatch('pointermove', { clientX: start[0] + 30, clientY: start[1] + 20 });
+  host.dispatch('pointerup', { clientX: start[0] + 30, clientY: start[1] + 20 });
+  assert.equal(editedAnnotations.length, 0);
+  assert.equal(host.captured.size, 0);
+  assert.deepEqual(host.transform(), before);
+  assert.ok(canvas.getSelectionPaperBounds());
+  assert.equal(canvas.fitSelection(), true);
+});
+
 test('a snapped group drag commits once, preserves lane spacing and does not jump below the drag threshold', () => {
   const original = [annotation('one', 10), annotation('two', 16)];
   const { canvas, host, sheet, client, groups, edited, errors } = fixture(original, ['one', 'two']);
@@ -677,6 +725,7 @@ test('touch graphics draw in physical paper coordinates without panning and canc
     host.dispatch('pointerup', { ...touch, clientX: end[0], clientY: end[1] });
     assert.equal(addedAnnotations.length, 1);
     assert.equal(addedAnnotations[0].kind, kind);
+    assert.equal(addedAnnotations[0].color, '#e34d59');
     near(addedAnnotations[0].points[0][0], 20);
     near(addedAnnotations[0].points[0][1], 30);
     near(addedAnnotations[0].points.at(-1)![0], 60);
@@ -688,6 +737,133 @@ test('touch graphics draw in physical paper coordinates without panning and canc
     host.dispatch('pointerup', { ...touch, clientX: end[0], clientY: end[1] });
     assert.equal(addedAnnotations.length, 1);
   }
+});
+
+test('pen freehand consumes coalesced samples, ignores palm touches and stays armed for consecutive strokes', () => {
+  const { canvas, host, client, addedAnnotations } = fixture();
+  canvas.setTool('freehand');
+  const pen = { pointerType: 'pen', pointerId: 42 };
+  const start = client([20, 30]),
+    end = client([60, 60]);
+  const sample = (point: Point2) => {
+    const p = client(point);
+    return { clientX: p[0], clientY: p[1] };
+  };
+  const before = host.transform();
+  host.dispatch('pointerdown', { ...pen, clientX: start[0], clientY: start[1] });
+  host.dispatch('pointerdown', { pointerType: 'touch', pointerId: 70, clientX: 300, clientY: 300 });
+  host.dispatch('pointerdown', { pointerType: 'touch', pointerId: 71, clientX: 350, clientY: 300 });
+  host.dispatch('pointermove', { pointerType: 'touch', pointerId: 70, clientX: 250, clientY: 300 });
+  host.dispatch('pointermove', {
+    ...pen,
+    clientX: end[0],
+    clientY: end[1],
+    getCoalescedEvents: () => [sample([30, 32]), sample([40, 48]), sample([50, 45])],
+  });
+  host.dispatch('pointerup', { pointerType: 'touch', pointerId: 70 });
+  host.dispatch('pointercancel', { pointerType: 'touch', pointerId: 71 });
+  host.dispatch('pointerup', { ...pen, clientX: end[0], clientY: end[1] });
+  assert.equal(addedAnnotations.length, 1);
+  for (const point of [
+    [30, 32],
+    [40, 48],
+    [50, 45],
+    [60, 60],
+  ] as Point2[])
+    assert.ok(
+      addedAnnotations[0].points.some(
+        (actual) => Math.hypot(actual[0] - point[0], actual[1] - point[1]) < 1e-8,
+      ),
+    );
+  assert.deepEqual(host.transform(), before);
+  const secondStart = client([70, 60]),
+    secondEnd = client([90, 80]);
+  host.dispatch('pointerdown', { ...pen, clientX: secondStart[0], clientY: secondStart[1] });
+  host.dispatch('pointermove', { ...pen, clientX: secondEnd[0], clientY: secondEnd[1] });
+  host.dispatch('pointerup', { ...pen, clientX: secondEnd[0], clientY: secondEnd[1] });
+  assert.equal(addedAnnotations.length, 2);
+  assert.notEqual(addedAnnotations[0].id, addedAnnotations[1].id);
+  assert.ok(addedAnnotations.every((item) => item.kind === 'freehand' && item.color === '#e34d59'));
+  const loopStart = client([100, 80]);
+  host.dispatch('pointerdown', { ...pen, clientX: loopStart[0], clientY: loopStart[1] });
+  host.dispatch('pointermove', {
+    ...pen,
+    clientX: loopStart[0] + 0.1,
+    clientY: loopStart[1] + 0.1,
+    getCoalescedEvents: () => [sample([110, 90]), sample([115, 80])],
+  });
+  host.dispatch('pointerup', { ...pen, clientX: loopStart[0], clientY: loopStart[1] });
+  assert.equal(
+    addedAnnotations.length,
+    3,
+    'A coalesced loop remains a stroke even when its latest sample returns near the start',
+  );
+});
+
+test('two-finger touch navigation remains available in freehand mode without leaving stray ink', () => {
+  const { canvas, host, addedAnnotations } = fixture();
+  canvas.setTool('freehand');
+  const before = host.transform();
+  host.dispatch('pointerdown', { pointerType: 'touch', pointerId: 10, clientX: 250, clientY: 250 });
+  host.dispatch('pointerdown', { pointerType: 'touch', pointerId: 11, clientX: 350, clientY: 250 });
+  host.dispatch('pointermove', { pointerType: 'touch', pointerId: 11, clientX: 400, clientY: 250 });
+  assert.ok(host.transform().scale > before.scale);
+  host.dispatch('pointerup', { pointerType: 'touch', pointerId: 11, clientX: 400, clientY: 250 });
+  host.dispatch('pointerup', { pointerType: 'touch', pointerId: 10, clientX: 250, clientY: 250 });
+  assert.equal(addedAnnotations.length, 0);
+  assert.equal(host.captured.size, 0);
+});
+
+test('pen takes priority over a preceding palm gesture and cancelled capture cannot commit a partial stroke', () => {
+  const { canvas, host, client, addedAnnotations } = fixture();
+  canvas.setTool('freehand');
+  const start = client([20, 30]),
+    end = client([60, 60]);
+  host.dispatch('pointerdown', {
+    pointerType: 'touch',
+    pointerId: 70,
+    clientX: start[0],
+    clientY: start[1],
+  });
+  host.dispatch('pointermove', {
+    pointerType: 'touch',
+    pointerId: 70,
+    clientX: end[0],
+    clientY: end[1],
+  });
+  const pen = { pointerType: 'pen', pointerId: 42 };
+  host.dispatch('pointerdown', { ...pen, clientX: start[0], clientY: start[1] });
+  host.dispatch('pointermove', { ...pen, clientX: end[0], clientY: end[1] });
+  host.releasePointerCapture(42);
+  host.dispatch('pointerup', { ...pen, clientX: end[0], clientY: end[1] });
+  assert.equal(addedAnnotations.length, 0);
+  host.dispatch('pointerdown', { ...pen, clientX: start[0], clientY: start[1] });
+  host.dispatch('pointermove', { ...pen, clientX: end[0], clientY: end[1] });
+  host.dispatch('pointercancel', pen);
+  assert.equal(addedAnnotations.length, 0);
+  host.dispatch('pointerdown', { ...pen, clientX: start[0], clientY: start[1] });
+  host.dispatch('pointerup', { ...pen, clientX: end[0], clientY: end[1] });
+  assert.equal(
+    addedAnnotations.length,
+    1,
+    'A pen-up endpoint still completes a stroke when the final move was not delivered',
+  );
+});
+
+test('stylus barrel and eraser buttons never create ink or delete existing notes', () => {
+  const { canvas, host, client, addedAnnotations, editedAnnotations, contexts } = fixture();
+  canvas.setTool('freehand');
+  const start = client([20, 30]),
+    end = client([60, 60]);
+  for (const button of [1, 2, 5]) {
+    const pen = { pointerType: 'pen', pointerId: 42, button };
+    host.dispatch('pointerdown', { ...pen, clientX: start[0], clientY: start[1] });
+    host.dispatch('pointermove', { ...pen, clientX: end[0], clientY: end[1] });
+    host.dispatch('pointerup', { ...pen, clientX: end[0], clientY: end[1] });
+  }
+  host.dispatch('contextmenu', { pointerType: 'pen' });
+  assert.equal(addedAnnotations.length + editedAnnotations.length + contexts.length, 0);
+  assert.equal(host.captured.size, 0);
 });
 
 test('text placement uses the inline editor options and moving notes preserves their complete independent geometry', () => {
@@ -718,6 +894,7 @@ test('text placement uses the inline editor options and moving notes preserves t
     text: 'Assembly note\nReview before release',
     fontSize: 3.5,
     strokeWidth: 0.4,
+    color: '#2678d4',
   });
   canvas.setTool('text');
   canvas.setGrid({ visible: false, snap: true, spacing: 5 });
@@ -725,6 +902,98 @@ test('text placement uses the inline editor options and moving notes preserves t
   assert.equal(addedAnnotations.length, 1);
   assert.deepEqual(addedAnnotations[0].points, [[70, 85]]);
   assert.equal(addedAnnotations[0].text, 'Assembly note\nReview before release');
+  assert.equal(addedAnnotations[0].color, '#2678d4');
+});
+
+test('annotation dragging rebases its pointer snapshot after selection changes the floating-control viewport', () => {
+  const note: DrawingAnnotation = {
+    id: 'note',
+    kind: 'text',
+    points: [[30, 40]],
+    text: 'Check fit',
+    fontSize: 4,
+    strokeWidth: 0.35,
+    color: '#2678d4',
+  };
+  const { canvas, host, client, editedAnnotations } = fixture([], [], [note]);
+  const callbacks = (canvas as unknown as { callbacks: { selectAnnotation(id?: string): void } })
+    .callbacks;
+  const selected = callbacks.selectAnnotation;
+  callbacks.selectAnnotation = (id) => {
+    selected(id);
+    canvas.zoomBy(2);
+  };
+  const start = client([31, 39]);
+  host.dispatch('pointerdown', { clientX: start[0], clientY: start[1] });
+  const scale = host.transform().scale;
+  host.dispatch('pointermove', { clientX: start[0] + 20, clientY: start[1] + 10 });
+  host.dispatch('pointerup', { clientX: start[0] + 20, clientY: start[1] + 10 });
+  assert.equal(editedAnnotations.length, 1);
+  near(editedAnnotations[0].points[0][0], 30 + 20 / scale);
+  near(editedAnnotations[0].points[0][1], 40 + 10 / scale);
+  assert.equal(editedAnnotations[0].color, '#2678d4');
+});
+
+test('selection and toolbar inset refreshes preserve the current screen mapping throughout a captured drag', () => {
+  const note: DrawingAnnotation = {
+    id: 'note',
+    kind: 'text',
+    points: [[30, 40]],
+    text: 'Check fit',
+    fontSize: 4,
+    strokeWidth: 0.35,
+    color: '#2678d4',
+  };
+  const { canvas, host, client, editedAnnotations } = fixture([], [], [note]);
+  (host as unknown as { parentElement: HTMLElement }).parentElement = {} as HTMLElement;
+  let top = 100,
+    bottom = 46;
+  const originalStyle = Object.getOwnPropertyDescriptor(globalThis, 'getComputedStyle');
+  Object.defineProperty(globalThis, 'getComputedStyle', {
+    configurable: true,
+    value: () => ({
+      getPropertyValue: (name: string) =>
+        `${name === '--canvas-top' ? top : name === '--canvas-bottom' ? bottom : 0}px`,
+    }),
+  });
+  try {
+    canvas.refreshViewport();
+    const originalScreen = host.transform();
+    const callbacks = (canvas as unknown as { callbacks: { selectAnnotation(id?: string): void } })
+      .callbacks;
+    const selected = callbacks.selectAnnotation;
+    callbacks.selectAnnotation = (id) => {
+      selected(id);
+      top = 160;
+      bottom = 80;
+      canvas.refreshViewport();
+    };
+    const start = client([31, 39]);
+    host.dispatch('pointerdown', { clientX: start[0], clientY: start[1] });
+    near(host.transform().x, originalScreen.x);
+    near(host.transform().y, originalScreen.y);
+    near(host.transform().scale, originalScreen.scale);
+    host.dispatch('pointermove', { clientX: start[0] + 10, clientY: start[1] + 6 });
+    top = 196;
+    bottom = 94;
+    canvas.refreshViewport();
+    near(host.transform().x, originalScreen.x);
+    near(host.transform().y, originalScreen.y);
+    near(host.transform().scale, originalScreen.scale);
+    host.dispatch('pointermove', { clientX: start[0] + 30, clientY: start[1] + 18 });
+    host.dispatch('pointerup', { clientX: start[0] + 30, clientY: start[1] + 18 });
+    assert.equal(
+      editedAnnotations.length,
+      1,
+      'An unchanged paper mapping must not cancel the captured drag',
+    );
+    near(editedAnnotations[0].points[0][0], 30 + 30 / originalScreen.scale);
+    near(editedAnnotations[0].points[0][1], 40 + 18 / originalScreen.scale);
+    assert.equal(editedAnnotations[0].color, note.color);
+  } finally {
+    if (originalStyle) Object.defineProperty(globalThis, 'getComputedStyle', originalStyle);
+    else Reflect.deleteProperty(globalThis, 'getComputedStyle');
+  }
 });
 
 test('read-only viewing pans over annotations without selecting, creating or editing them and exposes capture bounds', () => {

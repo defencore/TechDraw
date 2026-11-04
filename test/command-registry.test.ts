@@ -33,6 +33,44 @@ const key = (key: string, options: Partial<ShortcutEvent> = {}): ShortcutEvent =
 });
 const editing = { closest: () => ({}) } as unknown as EventTarget;
 
+test('batch preparation requires imported parts and instructions stay a contextual panel command', () => {
+  assert.equal(getCommand('prepare-all-drawings', ready)?.enabled, true);
+  assert.equal(getCommand('prepare-all-drawings', { ...ready, partCount: 0 })?.enabled, false);
+  assert.equal(getCommand('prepare-all-drawings', { ...ready, busy: true })?.enabled, false);
+  assert.equal(
+    getCommand('tab:instructions', { ...ready, inspectorTab: 'instructions' })?.active,
+    true,
+  );
+  assert.equal(getCommand('tab:instructions', { ...ready, viewerMode: true })?.enabled, false);
+});
+
+test('locked selections keep navigation and unlocking while blocking atomic group edits', () => {
+  const mixed = { ...ready, lockedCount: 1 };
+  for (const action of ['delete-selected-dimensions', 'delete-dimension', 'place-dimensions:top']) {
+    assert.equal(getCommand(action, mixed)?.enabled, false);
+    assert.match(getCommand(action, mixed)?.disabledReason ?? '', /Unlock/);
+  }
+  for (const action of ['fit-selection', 'edit-dimension', 'toggle-selection-lock'])
+    assert.equal(getCommand(action, mixed)?.enabled, true);
+  assert.equal(getCommand('toggle-selection-lock', mixed)?.label, 'Lock selection');
+  assert.equal(
+    getCommand('toggle-selection-lock', { ...ready, lockedCount: 2 })?.label,
+    'Unlock selection',
+  );
+  const annotation = { ...ready, selectionCount: 0, annotationSelection: true, lockedCount: 1 };
+  assert.equal(getCommand('toggle-selection-lock', annotation)?.label, 'Unlock selection');
+  assert.equal(getCommand('toggle-selection-lock', annotation)?.enabled, true);
+  assert.equal(
+    getCommand('toggle-selection-lock', { ...annotation, viewerMode: true })?.enabled,
+    false,
+  );
+  assert.equal(
+    getCommand('toggle-selection-lock', { ...ready, selectionCount: 0 })?.enabled,
+    false,
+  );
+  assert.equal(getCommand('toggle-selection-lock', ready)?.shortcut, undefined);
+});
+
 test('canonical command IDs and all six dimension tool shortcuts are unique', () => {
   assert.equal(
     new Set(commandDefinitions.map((command) => command.id)).size,
@@ -179,4 +217,32 @@ test('owned Save shortcuts stay reserved with a disabled explanation in empty an
         assert.equal(command.enabled, false);
         assert.ok(command.disabledReason);
       }
+});
+
+test('system fullscreen is an explicit viewer command with capability and active-state checks', () => {
+  const outside = getCommand('toggle-native-fullscreen', ready)!;
+  assert.equal(outside.enabled, false);
+  assert.equal(outside.disabledReason, 'Open drawing viewer first.');
+  const viewer = getCommand('toggle-native-fullscreen', { ...ready, viewerMode: true })!;
+  assert.equal(viewer.enabled, true);
+  assert.equal(viewer.label, 'Toggle system fullscreen');
+  assert.equal(viewer.group, 'Navigation');
+  assert.equal(viewer.icon, 'expand');
+  assert.equal(viewer.active, false);
+  assert.equal(
+    getCommand('toggle-native-fullscreen', { ...ready, viewerMode: true, nativeFullscreen: true })
+      ?.active,
+    true,
+  );
+  assert.equal(
+    getCommand('toggle-native-fullscreen', { ...ready, viewerMode: true, busy: true })?.enabled,
+    false,
+  );
+  const unsupported = getCommand('toggle-native-fullscreen', {
+    ...ready,
+    viewerMode: true,
+    nativeFullscreenAvailable: false,
+  })!;
+  assert.equal(unsupported.enabled, false);
+  assert.equal(unsupported.disabledReason, 'System fullscreen is unavailable in this browser.');
 });

@@ -1,5 +1,6 @@
 import { titleBlockDefaults, titleBlockKeys } from './drawing/title-block-data';
 import { parseDimensionTolerance } from './drawing/tolerances';
+import { annotationColor } from './drawing/annotation-style';
 import type {
   Bounds2,
   Dimension,
@@ -23,6 +24,7 @@ export interface ProjectData {
   settings: DrawingSettings;
   annotations: Record<string, DrawingAnnotation[]>;
   description: string;
+  instructions: Record<string, string>;
 }
 
 const VIEWS: ViewId[] = ['front', 'top', 'right', 'iso'];
@@ -57,6 +59,11 @@ function identifier(value: unknown, label: string): string {
   if (!result || ['__proto__', 'constructor', 'prototype'].includes(result))
     return invalid(`${label} is not a supported identifier.`);
   return result;
+}
+
+/** Manufacturing instructions are document text, independent of cached title-block notes. */
+export function parsePartInstructions(value: unknown): string {
+  return string(value, 'part manufacturing instructions', 20000);
 }
 function numeric(value: unknown, label: string, max = MAX_COORDINATE): number {
   if (typeof value !== 'number' || !Number.isFinite(value) || Math.abs(value) > max)
@@ -262,6 +269,7 @@ function dimension(value: unknown, budget: Budget): Dimension {
     automatic: boolean(d.automatic, 'automatic dimension flag'),
   };
   if (d.vertex !== undefined) output.vertex = point(d.vertex, 2, 'angle vertex');
+  if (d.locked !== undefined) output.locked = boolean(d.locked, 'dimension locked flag');
   if (d.textOffset !== undefined) output.textOffset = point(d.textOffset, 2, 'label offset');
   if (d.prefix !== undefined) output.prefix = string(d.prefix, 'dimension prefix', 1000);
   if (d.suffix !== undefined) output.suffix = string(d.suffix, 'dimension suffix', 1000);
@@ -351,12 +359,20 @@ function annotation(value: unknown, budget: Budget): DrawingAnnotation {
     return invalid('annotation point count does not match its kind.');
   const strokeWidth = numeric(data.strokeWidth, 'annotation stroke width', 10);
   if (strokeWidth < 0.1) return invalid('annotation stroke width must be 0.1–10 mm.');
+  let color: string;
+  try {
+    color = annotationColor(data.color);
+  } catch {
+    return invalid('annotation color must be a six-digit hexadecimal color.');
+  }
   const output: DrawingAnnotation = {
     id: identifier(data.id, 'annotation ID'),
     kind,
     points,
     strokeWidth,
+    color,
   };
+  if (data.locked !== undefined) output.locked = boolean(data.locked, 'annotation locked flag');
   if (data.text !== undefined) output.text = string(data.text, 'annotation text', 10000);
   if (kind === 'text' && !output.text?.trim())
     return invalid('text annotations require nonempty text.');
@@ -467,11 +483,23 @@ export function parseProject(text: string): ProjectData {
       },
     );
   }
+  const sourceInstructions =
+    data.instructions === undefined
+      ? {}
+      : record(data.instructions, 'part manufacturing instructions');
+  if (Object.keys(sourceInstructions).some((id) => !seenParts.has(id)))
+    return invalid('manufacturing instructions refer to an unknown part.');
+  const instructions = Object.create(null) as Record<string, string>;
+  for (const p of parts)
+    instructions[p.id] = Object.hasOwn(sourceInstructions, p.id)
+      ? parsePartInstructions(sourceInstructions[p.id])
+      : '';
   return {
     parts,
     dimensions,
     layouts,
     annotations,
+    instructions,
     description:
       data.description === undefined ? '' : string(data.description, 'project description', 100000),
     selected,
@@ -493,6 +521,7 @@ export function serializeProject(
     layouts: state.layouts,
     settings: state.settings,
     annotations: state.annotations ?? {},
+    instructions: state.instructions,
     description: state.description ?? '',
   };
   // Saving and opening share one contract, so a saved workspace always reopens safely.

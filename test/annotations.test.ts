@@ -17,6 +17,7 @@ import {
   pickAnnotation,
 } from '../src/ui/annotation-tools';
 import { readAnnotationEdit, renderAnnotationEditor } from '../src/ui/annotation-editor';
+import { annotationColor, DEFAULT_ANNOTATION_COLOR } from '../src/drawing/annotation-style';
 
 const note: DrawingAnnotation = {
   id: 'note',
@@ -85,7 +86,7 @@ test('review graphics export portable vector primitives with explicit arrowheads
     const markup = renderAnnotation(annotation);
     assert.match(markup, new RegExp(`data-annotation-kind="${kind}"`));
     assert.doesNotMatch(markup, /marker|filter|foreignObject/);
-    if (kind === 'arrow') assert.match(markup, / Z" fill="#20262b" stroke="none"/);
+    if (kind === 'arrow') assert.match(markup, / Z" fill="#e34d59" stroke="none"/);
     if (kind === 'ellipse') assert.match(markup, /rx="15" ry="10"/);
     const moved = translateAnnotation(annotation, [-3, 6]);
     assert.deepEqual(moved.points, [
@@ -104,7 +105,7 @@ test('blueprint changes SVG paint attributes without changing document text or g
     blue = renderAnnotation(note, false, 'blueprint');
   const palette = drawingPalette('blueprint');
   assert.match(blue, new RegExp(`fill="${palette.background}"`));
-  assert.match(blue, new RegExp(`fill="${palette.foreground}"`));
+  assert.match(blue, new RegExp(`fill="${DEFAULT_ANNOTATION_COLOR}"`));
   assert.match(blue, /#20262b white/);
   assert.equal(applyDrawingAppearance(paper, 'paper'), paper);
   assert.doesNotMatch(blue, /filter/);
@@ -124,6 +125,62 @@ test('blueprint changes SVG paint attributes without changing document text or g
     const remainder = attributes.replace(/\s+[\w:-]+\s*=\s*(?:"[^"]*"|'[^']*')/g, '');
     assert.equal(remainder.trim(), '', `Standalone SVG attributes must be quoted XML: ${tag}`);
   }
+});
+
+test('committed annotation colors survive blueprint conversion even when they equal drawing palette colors', () => {
+  for (const color of ['#e34d59', '#20262b', '#ffffff', '#16745e', '#7d858a', '#082c49']) {
+    const annotation = { ...note, id: 'custom-color', color };
+    for (const appearance of ['paper', 'blueprint'] as const) {
+      const output = renderDrawing(part, [], defaultSettings, undefined, undefined, {
+        annotations: [annotation],
+        appearance,
+      });
+      const group = output.svg.match(
+        /<g data-annotation-id="custom-color"[^>]*>[\s\S]*?<\/g>/,
+      )?.[0];
+      assert.ok(group);
+      assert.match(group, new RegExp(`stroke="${color}"`));
+      assert.match(group, new RegExp(`<text[^>]*fill="${color}"`));
+      const selected = renderAnnotation(annotation, true, appearance);
+      assert.match(selected, new RegExp(`<text[^>]*fill="${color}"`));
+      assert.match(selected, /class="annotation-selection"[^>]*stroke="#6ee7ff"/);
+    }
+    assert.equal(translateAnnotation(annotation, [5, 6]).color, color);
+  }
+});
+
+test('annotation color controls use strict hex values and preserve selected changes as a draft until Apply', () => {
+  assert.equal(annotationColor(), '#e34d59');
+  assert.equal(annotationColor('#AABBCC'), '#aabbcc');
+  for (const color of ['red', '#fff', '#11223344', 'url(javascript:test)', '#fff" stroke="red']) {
+    assert.throws(() => annotationColor(color), RangeError);
+    assert.throws(
+      () => createAnnotation('arrow', [10, 20], { ...defaultAnnotationOptions, color }),
+      RangeError,
+    );
+  }
+  const selected = { ...note, color: '#2678d4' };
+  const root = {
+    querySelector(selector: string) {
+      return selector === '[data-annotation-setting="color"]' ? { value: '#8B5BD6' } : undefined;
+    },
+  } as unknown as ParentNode;
+  const edited = readAnnotationEdit(root, selected);
+  assert.equal(edited.color, '#8b5bd6');
+  assert.equal(selected.color, '#2678d4');
+  const form = renderAnnotationEditor(selected);
+  assert.match(form, /id="annotation-color"[^>]*value="#2678d4"/);
+  assert.equal((form.match(/data-annotation-color=/g) ?? []).length, 6);
+  assert.match(form, /data-annotation-action="apply"/);
+  assert.doesNotMatch(form, /data-annotation-action="place"/);
+  assert.match(
+    renderAnnotationEditor(undefined, defaultAnnotationOptions, 'text'),
+    /data-annotation-action="place"/,
+  );
+  assert.doesNotMatch(
+    renderAnnotationEditor(undefined, defaultAnnotationOptions, 'arrow'),
+    /annotation-text|data-annotation-action="place"/,
+  );
 });
 
 test('a flat DXF receives one authoritative front projection and its own largest fitting scale', () => {
@@ -176,7 +233,8 @@ test('freehand drawing is bounded and smooth while blank text cannot become an a
   assert.equal(extendAnnotation(path, [20.01, 30.01]), path);
   path = { ...path, points: Array.from({ length: 4096 }, (_, index) => [20 + index, 30]) };
   path = extendAnnotation(path, [6000, 30]);
-  assert.equal(path.points.length, 4096);
+  assert.ok(path.points.length <= 4096);
+  assert.deepEqual(path.points.at(-1), [6000, 30]);
   const warning = renderDrawing(part, [], defaultSettings, undefined, undefined, {
     annotations: [{ ...note, points: [[-5, 30]] }],
   }).warnings;

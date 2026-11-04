@@ -72,6 +72,7 @@ export interface Dimension {
   prefix?: string;
   suffix?: string;
   tolerance?: DimensionTolerance;
+  locked?: boolean;
 }
 export type PaperFormat = 'A4' | 'A3' | 'A2' | 'A1';
 export type TemplateId = 'eskd' | 'eskd-uk' | 'iso' | 'minimal';
@@ -133,6 +134,8 @@ export interface DrawingAnnotation {
   text?: string;
   strokeWidth: number;
   fontSize?: number;
+  color?: string;
+  locked?: boolean;
 }
 export interface PartDrawing {
   partId: string;

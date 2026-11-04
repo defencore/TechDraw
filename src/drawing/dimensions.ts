@@ -62,13 +62,17 @@ function arrangeCircleCallouts(result: Dimension[], scale: number, precision: nu
   for (const viewId of views) {
     const projection = part?.views.find((view) => view.id === viewId);
     const circles = result.filter(
-      (dimension) => dimension.viewId === viewId && ['diameter', 'radius'].includes(dimension.kind),
+      (dimension) =>
+        dimension.viewId === viewId &&
+        !dimension.locked &&
+        ['diameter', 'radius'].includes(dimension.kind),
     );
     if (!circles.length) continue;
     const occupied = result
       .filter(
         (dimension) =>
-          dimension.viewId === viewId && !['diameter', 'radius'].includes(dimension.kind),
+          dimension.viewId === viewId &&
+          (dimension.locked || !['diameter', 'radius'].includes(dimension.kind)),
       )
       .map(
         (dimension) => dimensionGeometry(dimension, { x: 0, y: 0, scale }, precision).labelBounds,
@@ -175,6 +179,7 @@ export function arrangeDimensions(
   }
   const groups = new Map<string, Span[]>();
   for (const d of result) {
+    if (d.locked) continue;
     if (!['horizontal', 'vertical', 'aligned'].includes(d.kind)) continue;
     delete d.textOffset;
     let axis: Point2 = d.kind === 'horizontal' ? [1, 0] : [0, 1];

@@ -16,6 +16,7 @@ The Open CASCADE WebAssembly kernel imports STEP geometry and computes precise h
 - Edit a selected dimension in a compact panel with tolerance-mode buttons for None, ±, upper/lower deviations or a manually entered fit designation. Tolerances remain editable in saved projects and appear in PDF exports.
 - Arrange smaller dimensions inside larger spans, with separate lanes for overlapping dimensions.
 - Select dimension groups, move them together, and place compatible dimensions on a chosen side with shared alignment or cascade spacing.
+- Lock selected dimensions or review marks against accidental movement, editing and deletion; lock state is saved and undoable.
 - Find dimensions by value, tolerance, note, view or type. Use directional box selection, contextual actions and command search for larger drawing sets.
 - Show a paper grid and snap annotation placement to a configurable step; grid preferences are remembered independently of drawing data.
 - Set paper size A4, A3, A2 or A1, orientation, scale, decimal precision, hidden edges and centre lines.
@@ -23,7 +24,9 @@ The Open CASCADE WebAssembly kernel imports STEP geometry and computes precise h
 - Edit title-block data, sign-off names, signatures, dates, change records, inventory fields and technical notes. Entries are saved in this browser and reused for subsequent parts and sessions; **Clear** resets the fields and their cache.
 - Inspect the sheet with cursor-anchored zoom from 25% to 1600%, panning and Fit.
 - Export a vector PDF with one page per selected part and the same layout as the preview.
-- Add paper-space review text, arrows, rectangles, ellipses and freehand marks, with undo/redo and inline editing.
+- Add colored paper-space review text, arrows, rectangles, ellipses and freehand marks, with undo/redo and inline editing.
+- Write manufacturing instructions for each part and print numbered steps beside or above its title block.
+- Prepare drawings for every imported part, then export one multipage PDF or save one project ZIP with shared originals.
 - Save and reopen `.techdraw.zip` archives containing editable drawing data, original STEP/DXF files and a project description. Validated `.techdraw.json` projects can still be opened.
 - Copy, save or share a PNG of the visible area, selected items, whole sheet or a captured region, including dimensions and review marks.
 - Use light or dark interface themes and Paper or Blueprint drawing appearance. Choose export appearance independently.
@@ -35,16 +38,28 @@ Automatic dimensions are geometric suggestions. The app does not import semantic
 
 1. Choose **Import files**, drop STEP/DXF files into the workspace, or try an example. For a DXF with unknown or different units, set **Import settings → DXF units** before importing.
 2. In the parts panel, open a part and check the parts to include in the drawing set.
-3. Set the sheet format and template. Complete **Title block** and technical notes. Saved title-block entries are reused automatically; choose **Clear** in the title-block editor when starting a new specification. GOST A4 sheets use portrait orientation.
+3. Set the sheet format and template. Complete **Title block** and shared technical notes. Saved title-block entries are reused automatically; choose **Clear** in the title-block editor when starting a new specification. GOST A4 sheets use portrait orientation.
 4. Review automatic dimensions. Choose a dimension icon in the floating drawing dock; its tooltip shows the tool name and shortcut. Pick a straight edge, circular edge, or snap points as appropriate, then move the draft preview and click to place it. Select an existing dimension to edit it, or drag its label or line to reposition it.
-5. Use **Markup** for review text or graphics. Add handover instructions under **Project description** in the parts panel.
-6. Choose **Export** for PDF/SVG and Paper/Blueprint appearance, or **Copy image** for a PNG preview. Use **Save** (`Ctrl/⌘+S`) to download the complete local project archive; **Open project** restores it.
+5. Use **Markup** for review text or graphics. Open **Instructions** to write manufacturing steps for the active part, then choose **Apply instructions** to preview them on its drawing. **Project description** in the parts panel holds separate project handover text.
+6. For an assembly or several files, choose **Drawings for all parts** to select every part and prepare its sheet. Choose **Export** for a multipage PDF, or **Copy image** for a PNG preview of the active drawing. Use **Save** (`Ctrl/⌘+S`) to download the complete local project archive; **Open project** restores it. SVG export uses the active part.
+
+The inspector tabs are **Dimensions**, **Markup**, **Instructions**, **Sheet** and **Title block**.
+
+## Manufacturing instructions and drawing sets
+
+**Instructions** belongs to the active part. Enter one manufacturing step per line; nonempty lines become numbered steps. Short text fits beside the title block; longer text uses a full-width panel above it. Existing step numbers are retained. **Apply instructions** updates the preview, **Reset draft** restores that part's last committed text, and Undo restores its previous instructions and layout. Switching parts keeps each part's draft independently.
+
+**Save**, PDF/SVG export, **Copy image**, region capture and **Drawings for all parts** also include pending instructions from every part. All pending text is validated before any of those drafts is committed; each changed part receives its own undo entry. Other controls continue to show committed instructions until Apply or one of these actions.
+
+Instruction text changes the space available for views. An unlocked part receives a new layout when needed; locked drawing positions remain fixed. Review the warnings if the notes are too long or overlap the fixed drawing. Shorten the text, unlock and arrange the drawing, or use a larger sheet. PDF export refuses overflowing content. Per-part instructions are independent of the cached shared technical notes and the project description.
+
+**Drawings for all parts** prepares a sheet for every imported element and selects every part for export. It does not start a download. **Export** then creates one PDF page per selected part; **Save** keeps all parts, their dimensions, markup, instructions and layouts in one ZIP. Placed components from the same STEP file share one archived original rather than duplicating it for each drawing.
 
 ## Local projects and source files
 
-**Save** downloads `workspace.techdraw.zip`. It contains `project.json` with committed dimensions, tolerance text, review annotations, title-block data and fixed view layouts; original imported files under `sources/`; `manifest.json` with source associations, byte sizes and SHA-256 digests; and a readable `README.txt` containing the project description. Original source bytes are preserved without conversion. A multi-part STEP assembly shares its original file across its placed parts.
+**Save** downloads `workspace.techdraw.zip`. It contains `project.json` with committed dimensions, tolerance text, review annotations, per-part manufacturing instructions, title-block data and fixed view layouts; original imported files under `sources/`; `manifest.json` with source associations, byte sizes and SHA-256 digests; and a readable `README.txt` containing the project description. Original source bytes are preserved without conversion. A multi-part STEP assembly shares its original file across its placed parts.
 
-**Open project** accepts the ZIP archive or the supported validated JSON project format. JSON contains editable projected drawing data, but does not embed original CAD files. If an opened project has unavailable originals, a later archive records them as missing instead of reconstructing a source file from projections. Project descriptions are separate from the title block's printed technical notes.
+**Open project** accepts the ZIP archive or the supported validated JSON project format. JSON contains editable projected drawing data, but does not embed original CAD files. If an opened project has unavailable originals, a later archive records them as missing instead of reconstructing a source file from projections. Project descriptions are separate from the printed shared technical notes and per-part manufacturing instructions.
 
 Projects and original source bytes are held in the current browser session until saved. The title-block, theme, interface-language and grid preferences have separate browser storage; that storage is not a saved drawing project. Archive input is limited to 128 MB, with at most 256 MB of expanded content, 100 MB of drawing JSON and 64 MB per original source. Paths, source associations and digests are checked before the workspace is replaced.
 
@@ -95,7 +110,11 @@ In **Box select** (`B`), drag left to right to enclose complete annotations, inc
 
 For a selected group, choose **Cascade** for separate dimension lines or **Align** for a shared baseline, then choose a side in **Arrange dimensions**. Horizontal dimensions support Top/Bottom, vertical dimensions support Left/Right, and radius/diameter labels support all four sides. Aligned dimensions use geometrically compatible sides; angles stay unchanged. Nested or colliding spans keep separate lines even in Align mode. **Select view** selects the dimensions in the chosen orthographic view. Dragging a selected dimension moves its group in one undoable operation; measurements and source points stay fixed.
 
-Grid spacing uses millimetres on the printed sheet, independently of zoom and drawing scale. Show Grid and Snap to Grid are separate controls; both start off, with a 5 mm default step. Enter a custom step from 0.1 to 100 mm, or use a suggested value such as 1, 5 or 10 mm. Hold Alt to move freely. The visible grid may simplify at low zoom, while snapping retains the requested step. The grid is a workspace aid and is absent from SVG, PDF and printed output.
+Choose **Lock** / **Lock selection** for selected dimensions or a review mark. A lock badge identifies protected items, and their editing fields are disabled. Locked items remain selectable for inspection, focus and unlocking. If a selected group contains any locked item, dragging, deleting and side placement are blocked for the whole group; choose **Unlock** / **Unlock selection** before changing it.
+
+**Auto layout** is blocked when the active part has locked items. **Refresh automatic suggestions** preserves its locked objects and current view layout. Shared paper format, orientation, template and drawing-scale changes are blocked while any part in the workspace has a lock, preventing a reflow from moving protected dimensions. An unlocked part can still use Auto layout independently. Lock/unlock is one undoable action and survives JSON/ZIP saving and reopening, including each mark's color.
+
+Grid spacing uses millimetres on the printed sheet, independently of zoom and drawing scale. Show Grid and Snap to Grid are separate controls; both start off, with a 5 mm default step. The dropdown lists 1×1, 1.25×1.25, 2.54×2.54, 5×5 and 10×10 mm in that order. Choose Custom at the end to enter a precise step from 0.1 to 100 mm. Hold Alt to move freely. The visible grid may simplify at low zoom, while snapping retains the requested step. The grid is a workspace aid and is absent from SVG, PDF and printed output.
 
 To specify a dimensional tolerance, select the dimension and use the **Tolerance** mode buttons in its editing panel. With **±**, enter only the numeric magnitude, such as `0.05`; the ± symbol is supplied automatically. For upper/lower deviations, set each sign with its sign controls and enter the values. For a fit, enter a designation such as `H7`. Review the preview and choose **Apply**. Changing the mode or typing a draft does not change the drawing until applied. **Clear** in the tolerance editor removes the applied tolerance. Linear deviations use millimetres; angular deviations use degrees. Fits apply to linear dimensions and are entered explicitly: the app does not infer a fit from STEP geometry or calculate its limit deviations. The measured nominal value stays tied to the geometry. Applied tolerance edits support undo/redo, project saving and PDF export.
 
@@ -113,13 +132,17 @@ Complex assemblies are split into selectable placed solids. Reused products with
 
 ## Review, images and workshop viewing
 
-Open **Markup** and choose Text, Arrow, Rectangle, Ellipse or Freehand. Enter text before clicking the sheet to place it, or drag to create a graphic. Select a review annotation to move it or edit its paper position, size, text and line width. Review marks use paper millimetres and do not change CAD geometry or measured dimension values. They are included in saved projects and PDF, SVG and PNG output.
+Open **Markup** and choose a tool from the visible tool cards. For a note, choose **Text**, enter the text and choose a color, then select **Place text** and click the paper. For Arrow, Rectangle, Ellipse or Freehand, choose a color and line width, then drag on the paper. Release to finish the graphic or stroke. Select an unlocked mark to move it or edit its paper position, size, text, line width and color; choose **Apply changes** to commit the editor values.
+
+Freehand stays active for multiple mouse or pen strokes. Lift between strokes; choose **Finish drawing**, Select or `Esc` when finished. Each completed stroke remains independently editable and undoable. While a pen stroke is active, other pointer contacts such as a resting palm are ignored. Two-finger navigation remains available between strokes; freehand points are not forced onto the paper grid.
+
+Review marks start in red so they stand out from CAD linework. Preset swatches and **Custom color** set each mark independently. The chosen color is retained on both Paper and Blueprint sheets and in project archives, PDF, SVG and PNG output. Review marks use paper millimetres and do not change CAD geometry or measured dimension values.
 
 **Copy image** opens a prepared image preview. Choose Visible area, Selected items or Whole sheet, or use **Select area** / **Capture region** to crop a rectangle. Choose Paper or Blueprint, then **Copy image**, **Save PNG**, or **Share…** where the browser exposes file sharing. Dimensions and review marks are included; workspace controls and the grid are excluded. PNG is a raster preview; PDF retains the selected physical paper dimensions.
 
 Clipboard image writing and native sharing depend on the browser, its permissions and the user gesture. If copying is blocked, the dialog keeps **Save PNG** available. Native Share is shown only when the platform can share the prepared image file.
 
-**View** opens a read-only drawing viewer with part selection, pan/zoom, appearance controls and image sharing. Editing commands stay disabled until **Exit viewer**. Native fullscreen is requested when available; otherwise the viewer fills the browser. **Keep screen awake** requests a screen wake lock only while the viewer is active and visible. The browser or operating system can deny or release it; the status reports that condition and offers a retry. Leaving the viewer releases the lock.
+**View** opens a read-only drawing viewer with part selection, pan/zoom, appearance controls and image sharing. Editing commands stay disabled until **Back to workspace**. The viewer fills the browser without changing the browser surface; use the separate **System fullscreen** button when supported. **Keep screen awake** requests a screen wake lock only while the viewer is active and visible. The browser or operating system can deny or release it; the status reports that condition and offers a retry. Leaving the viewer releases the lock.
 
 The interface's **EN / UA** switch does not translate imported names, user-entered notes, dimensions or document text. Frame language remains controlled by the selected sheet template. Dark interface mode uses the Blueprint drawing palette by default; the viewer and export dialogs can choose Paper or Blueprint independently.
 

@@ -9,6 +9,7 @@ import {
   MAX_VIEWPORT_ZOOM,
   MIN_VIEWPORT_ZOOM,
   panViewport,
+  preserveViewportTransform,
   resizeViewport,
   toSheet,
   zoomAt,
@@ -204,4 +205,42 @@ test('invalid or oversized control insets cannot make a collapsed viewport non-f
     assert.ok(Object.values(transform).every(Number.isFinite));
     assert.ok(transform.scale > 0);
   }
+});
+
+test('changing floating controls preserves exact paper scale, origin and every screen point', () => {
+  const previous = { ...metrics, insets: { top: 100, right: 0, bottom: 46, left: 0 } };
+  const next = { ...metrics, insets: { top: 160, right: 25, bottom: 94, left: 30 } };
+  const initial: ViewportState = { zoom: 2.7, pan: [121, -73] };
+  const preserved = preserveViewportTransform(initial, previous, next);
+  const before = getViewportTransform(initial, previous),
+    after = getViewportTransform(preserved, next);
+  near(after.scale, before.scale);
+  near(after.x, before.x);
+  near(after.y, before.y);
+  assert.notEqual(
+    preserved.zoom,
+    initial.zoom,
+    'The relative fit percentage adjusts to preserve physical scale',
+  );
+  for (const point of [
+    [0, 0],
+    [420, 297],
+    [103.74, 217.91],
+    [-10, 350],
+  ] as Point2[])
+    nearPoint(fromSheet(point, preserved, next), fromSheet(point, initial, previous));
+  nearPoint(preserveViewportTransform(preserved, next, previous).pan, initial.pan);
+  assert.deepEqual(initial, { zoom: 2.7, pan: [121, -73] });
+});
+
+test('inset preservation respects zoom limits and retains paper origin when exact scale is impossible', () => {
+  const previous = { ...metrics, insets: { top: 0, right: 0, bottom: 0, left: 0 } };
+  const next = { ...metrics, insets: { top: 450, right: 0, bottom: 100, left: 0 } };
+  const initial: ViewportState = { zoom: MAX_VIEWPORT_ZOOM, pan: [7, -11] };
+  const preserved = preserveViewportTransform(initial, previous, next);
+  assert.equal(preserved.zoom, MAX_VIEWPORT_ZOOM);
+  const before = getViewportTransform(initial, previous),
+    after = getViewportTransform(preserved, next);
+  assert.ok(after.scale < before.scale);
+  nearPoint([after.x, after.y], [before.x, before.y]);
 });

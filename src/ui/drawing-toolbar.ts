@@ -2,6 +2,7 @@ import type { CanvasTool } from './drawing-canvas';
 import { dimensionTools } from './command-registry';
 import { button } from './components';
 import type { GridSettings } from './drawing-grid';
+import { renderGridSpacingEditor } from './grid-spacing-editor';
 
 interface ToolbarContext {
   tool: CanvasTool;
@@ -10,6 +11,7 @@ interface ToolbarContext {
   canRedo: boolean;
   zoomOptions: string;
   grid: GridSettings;
+  customGrid?: boolean;
   mode?: 'dimensions' | 'annotations';
 }
 
@@ -20,6 +22,7 @@ export function renderWorkspaceControls({
   canRedo,
   zoomOptions,
   grid,
+  customGrid = false,
   mode = 'dimensions',
 }: ToolbarContext): string {
   const control = (
@@ -43,7 +46,9 @@ export function renderWorkspaceControls({
     );
   const divider = '<span class="dock-divider" aria-hidden="true"></span>';
   return `<div class="workspace-dock" role="toolbar" aria-label="Drawing tools">
-    <div class="dock-group navigation-tools" role="group" aria-label="Navigation">${control('tool:select', 'Select and move dimensions', 'pointer', { selected: tool === 'select', shortcut: 'Escape', keyHint: 'Esc' })}${control('tool:box-select', 'Box select dimensions', 'boxSelect', { selected: tool === 'box-select', shortcut: 'B' })}${control('tool:pan', 'Pan drawing', 'hand', { selected: tool === 'pan', shortcut: 'P' })}</div>
+    <div class="dock-mode-switch" role="group" aria-label="Drawing mode">${button('tab:dimensions', 'Dimensions', undefined, `dock-mode${mode === 'dimensions' ? ' active' : ''}`, `aria-pressed="${mode === 'dimensions'}"${enabled ? '' : ' disabled'}`)}${button('tab:annotations', 'Markup', undefined, `dock-mode${mode === 'annotations' ? ' active' : ''}`, `aria-pressed="${mode === 'annotations'}"${enabled ? '' : ' disabled'}`)}</div>
+    ${divider}
+    <div class="dock-group navigation-tools" role="group" aria-label="Navigation">${control('tool:select', mode === 'annotations' ? 'Select and move marks' : 'Select and move dimensions', 'pointer', { selected: tool === 'select', shortcut: 'Escape', keyHint: 'Esc' })}${control('tool:box-select', 'Box select dimensions', 'boxSelect', { selected: tool === 'box-select', shortcut: 'B' })}${control('tool:pan', 'Pan drawing', 'hand', { selected: tool === 'pan', shortcut: 'P' })}</div>
     ${divider}
     ${
       mode === 'annotations'
@@ -63,10 +68,9 @@ export function renderWorkspaceControls({
         : `<div class="dock-group dimension-tools" role="group" aria-label="Add dimensions">${dimensionTools.map(({ id, label, icon, shortcut }) => control(`tool:${id}`, label, icon, { shortcut, selected: tool === id, dimension: true })).join('')}</div>`
     }
     ${divider}
-    <div class="dock-group automatic-tools" role="group" aria-label="Automatic dimensions">${control('auto-dimensions', 'Refresh automatic suggestions', 'magic')}${control('arrange-dimensions', 'Auto layout', 'layers')}</div>
-    ${divider}
+    ${mode === 'dimensions' ? `<div class="dock-group automatic-tools" role="group" aria-label="Automatic dimensions">${control('auto-dimensions', 'Refresh automatic suggestions', 'magic')}${control('arrange-dimensions', 'Auto layout', 'layers')}</div>${divider}` : ''}
     <div class="dock-group history-tools" role="group" aria-label="History">${control('undo', 'Undo', 'undo', { disabled: !canUndo, shortcut: 'Control+Z Meta+Z', keyHint: 'Ctrl/⌘ Z' })}${control('redo', 'Redo', 'redo', { disabled: !canRedo, shortcut: 'Control+Shift+Z Meta+Shift+Z', keyHint: 'Ctrl/⌘ Shift Z' })}</div>
   </div>
-  <div class="grid-dock" role="toolbar" aria-label="Grid controls"><span id="grid-density" class="grid-density" hidden></span>${control('toggle-grid', 'Show grid', 'grid', { selected: grid.visible, shortcut: 'G' })}${control('toggle-grid-snap', 'Snap to grid', 'magnet', { selected: grid.snap, shortcut: 'S' })}<span class="dock-divider" aria-hidden="true"></span><label class="grid-step"><input id="grid-spacing" aria-label="Grid step in millimetres on paper" type="number" min="0.1" max="100" step="0.1" value="${grid.spacing}" list="grid-presets" ${enabled ? '' : 'disabled'}/><span>mm</span></label><datalist id="grid-presets">${[1, 2, 5, 10, 20].map((value) => `<option value="${value}"></option>`).join('')}</datalist></div>
+  <div class="grid-dock" role="toolbar" aria-label="Grid controls"><span id="grid-density" class="grid-density" hidden></span>${control('toggle-grid', 'Show grid', 'grid', { selected: grid.visible, shortcut: 'G' })}${control('toggle-grid-snap', 'Snap to grid', 'magnet', { selected: grid.snap, shortcut: 'S' })}<span class="dock-divider" aria-hidden="true"></span>${renderGridSpacingEditor(grid.spacing, enabled, customGrid)}</div>
   <div class="viewport-dock" role="toolbar" aria-label="View controls">${control('zoom-out', 'Zoom out', 'minus', { keyHint: '-' })}<select id="zoom" aria-label="Sheet zoom" ${enabled ? '' : 'disabled'}>${zoomOptions}</select>${control('zoom-in', 'Zoom in', 'plus', { keyHint: '+' })}${divider}${control('fit', 'Fit sheet', 'fit', { shortcut: '0' })}</div>`;
 }

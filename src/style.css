@@ -825,14 +825,6 @@ h1 {
   left: 0;
   transform: none;
 }
-.grid-step {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding-right: 7px;
-  color: var(--muted);
-  font-size: 10px;
-}
 .grid-density {
   position: absolute;
   bottom: calc(100% + 5px);
@@ -844,17 +836,6 @@ h1 {
   color: var(--muted);
   font-size: 9px;
   white-space: nowrap;
-}
-.grid-step input {
-  width: 53px;
-  min-height: 28px;
-  padding: 3px 4px;
-  border: 0;
-  background: transparent;
-  color: var(--ink);
-  font-size: 11px;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
 }
 @container (max-width: 540px) {
   .canvas-shell {
@@ -2211,8 +2192,5 @@ h1 {
   .grid-dock .dock-button {
     width: 40px;
     height: 40px;
-  }
-  .grid-step input {
-    min-height: 40px;
   }
 }

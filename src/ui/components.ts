@@ -4,6 +4,10 @@ import { escapeHtml as e } from './utils';
 import { t } from './i18n';
 export const button = (action: string, label: string, ico?: string, cls = '', extra = '') =>
   `<button type="button" class="${cls}" data-action="${action}" ${extra}>${ico ? icon(ico) : ''}${t(label)}</button>`;
+export const renderLockBadge = (locked?: boolean): string =>
+  locked
+    ? `<span class="item-lock-badge" role="img" aria-label="${e(t('Locked'))}" title="${e(t('Locked'))}">${icon('lock')}</span>`
+    : '';
 export const field = (
   label: string,
   key: keyof DrawingSettings,

@@ -360,3 +360,28 @@ test('an overlapping unselected dimension occupies its baseline even when its la
   assert.ok(dimensionLine(result.dimensions[0], drawing).a[1] <= fixedY - 10 + 1e-8);
   assert.deepEqual(result.dimensions[1], original);
 });
+
+test('selected locks are reported separately and remain occupied without any position or specification changes', () => {
+  const drawing = layout();
+  const fixed: Dimension = {
+    ...linear('fixed', 0, 40),
+    offset: -35.7,
+    locked: true,
+    tolerance: { kind: 'fit', designation: 'H7' },
+  };
+  const movable = linear('movable', 0, 80);
+  const result = applyDimensionPlacement(
+    [fixed, movable],
+    new Set(['fixed', 'movable']),
+    part,
+    drawing,
+    { side: 'top', mode: 'cascade', gap: 10, gridSpacing: 10, precision: 2 },
+  );
+  assert.deepEqual(result.dimensions[0], fixed);
+  assert.deepEqual(result.lockedIds, ['fixed']);
+  assert.deepEqual(result.placedIds, ['movable']);
+  assert.deepEqual(result.unsupportedIds, []);
+  assert.ok(
+    dimensionLine(result.dimensions[1], drawing).a[1] < dimensionLine(fixed, drawing).a[1] - 7,
+  );
+});

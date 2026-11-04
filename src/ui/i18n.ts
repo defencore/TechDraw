@@ -110,6 +110,7 @@ function translated(text: string): string {
     ],
     [/^(\d+) dimensions selected$/, (count) => `Вибрано розмірів: ${count}`],
     [/^(\d+) selected$/, (count) => `Вибрано: ${count}`],
+    [/^(\d+) locked$/, (count) => `Заблоковано: ${count}`],
     [/^(\d+) more messages?$/, (count) => `Ще повідомлень: ${count}`],
     [/^(\d+) commands? available\.$/, (count) => `Доступно команд: ${count}.`],
     [/^Preview: (.*)$/s, (label) => `Попередній вигляд: ${label}`],
@@ -149,6 +150,10 @@ function translated(text: string): string {
     [
       /^Creating (\d+) vector PDF pages?…$/,
       (count) => `Створення сторінок векторного PDF: ${count}…`,
+    ],
+    [
+      /^Preparing drawing (\d+) of (\d+)…$/,
+      (current, total) => `Підготовка креслення ${current} із ${total}…`,
     ],
     [
       /^(\d+) parts? imported\. Review the dimensions before export\.$/,
@@ -202,12 +207,18 @@ function translated(text: string): string {
 
 /** Return plain interface text. Callers escape it when inserting it into HTML. */
 export function translate(text: string, params: Record<string, string | number> = {}): string {
-  const source = text.replace(/\{(\w+)\}/g, (token, key: string) =>
-    Object.hasOwn(params, key) ? String(params[key]) : token,
-  );
+  const interpolate = (value: string) =>
+    value.replace(/\{(\w+)\}/g, (token, key: string) =>
+      Object.hasOwn(params, key) ? String(params[key]) : token,
+    );
+  const source = interpolate(text);
   if (language === 'en') return source;
   const content = source.trim();
-  const result = source.replace(content, translated(content));
+  const template = translated(text.trim());
+  const result = source.replace(
+    content,
+    template !== text.trim() ? interpolate(template) : translated(content),
+  );
   if (result !== source) {
     if (canonical.size >= 4096) canonical.clear();
     canonical.set(result, source);

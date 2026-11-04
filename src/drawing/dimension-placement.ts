@@ -19,6 +19,7 @@ export interface DimensionPlacementResult {
   dimensions: Dimension[];
   placedIds: string[];
   unsupportedIds: string[];
+  lockedIds: string[];
 }
 
 interface PlacementItem {
@@ -212,6 +213,7 @@ export function applyDimensionPlacement(
   const groups = new Map<string, PlacementItem[]>();
   const placed = new Set<string>();
   const unsupported = new Set<string>();
+  const locked = new Set<string>();
   const models: Bounds2[] = [];
   for (const view of part.views) {
     const transform = layout.viewTransforms[view.id];
@@ -225,7 +227,7 @@ export function applyDimensionPlacement(
     }
   }
   const unselected = dimensions
-    .filter((dimension) => !ids.has(dimension.id))
+    .filter((dimension) => !ids.has(dimension.id) || dimension.locked)
     .flatMap((dimension) => {
       const transform = layout.viewTransforms[dimension.viewId];
       return transform ? [dimensionGeometry(dimension, transform, options.precision)] : [];
@@ -236,6 +238,10 @@ export function applyDimensionPlacement(
   );
   for (const dimension of result) {
     if (!ids.has(dimension.id)) continue;
+    if (dimension.locked) {
+      locked.add(dimension.id);
+      continue;
+    }
     const transform = layout.viewTransforms[dimension.viewId];
     const model = transform && paperBounds(part, dimension.viewId, transform);
     const item =
@@ -332,5 +338,6 @@ export function applyDimensionPlacement(
       .filter((dimension) => placed.has(dimension.id))
       .map((dimension) => dimension.id),
     unsupportedIds: [...unsupported],
+    lockedIds: [...locked],
   };
 }

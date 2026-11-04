@@ -331,3 +331,47 @@ test('broad shell arcs combine distinct angular spans into one exact radius call
     'a full diameter already conveys that same circular size',
   );
 });
+
+test('arranging leaves locked linear and circle annotations completely unchanged', () => {
+  const input: Dimension[] = [
+    {
+      id: 'linear',
+      viewId: 'front',
+      kind: 'horizontal',
+      a: [0, 0],
+      b: [40, 0],
+      value: 40,
+      offset: -27,
+      textOffset: [8, 3],
+      automatic: true,
+      locked: true,
+    },
+    {
+      id: 'circle',
+      viewId: 'front',
+      kind: 'diameter',
+      a: [20, 6],
+      b: [23, 6],
+      value: 6,
+      offset: -18,
+      textOffset: [7, -11],
+      automatic: false,
+      locked: true,
+    },
+    {
+      id: 'movable',
+      viewId: 'front',
+      kind: 'horizontal',
+      a: [0, 0],
+      b: [20, 0],
+      value: 20,
+      offset: 31,
+      automatic: false,
+    },
+  ];
+  const before = structuredClone(input);
+  const arranged = arrangeDimensions(input, { part: sample(), scale: 0.5 });
+  assert.deepEqual(arranged.slice(0, 2), before.slice(0, 2));
+  assert.notEqual(arranged[2].offset, input[2].offset);
+  assert.deepEqual(input, before);
+});

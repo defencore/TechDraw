@@ -15,6 +15,28 @@ import { field } from '../src/ui/components';
 
 test.afterEach(() => setLanguage('en'));
 
+test('template messages translate before interpolating counts', () => {
+  setLanguage('uk');
+  assert.equal(translate('{count} locked', { count: 2 }), 'Заблоковано: 2');
+  setLanguage('en');
+  assert.equal(translate('{count} locked', { count: 2 }), '2 locked');
+});
+
+test('viewer system-fullscreen labels translate without changing their command identity', () => {
+  setLanguage('uk');
+  for (const [source, expected] of [
+    ['System fullscreen', 'Системний повноекранний режим'],
+    ['Exit system fullscreen', 'Вийти із системного повноекранного режиму'],
+    ['Back to workspace', 'Повернутися до робочої області'],
+    ['Toggle system fullscreen', 'Перемкнути системний повноекранний режим'],
+    [
+      'System fullscreen is unavailable in this browser.',
+      'Системний повноекранний режим недоступний у цьому браузері.',
+    ],
+  ])
+    assert.equal(translate(source), expected);
+});
+
 test('language is strictly restored and storage failures do not prevent a session change', () => {
   assert.equal(readLanguage(), 'en');
   for (const value of ['ua', 'UK', '"uk"', '', 'false'])

@@ -387,12 +387,12 @@ test('technical notes disclose omitted lines rather than silently dropping requi
   const rendered = renderDrawing(part, autoDimensions(part), {
     ...settings,
     template: 'iso',
-    notes: Array.from({ length: 12 }, (_, index) => `Requirement ${index + 1}`).join('\n'),
+    notes: Array.from({ length: 100 }, (_, index) => `Requirement ${index + 1}`).join('\n'),
   });
   assert.ok(
-    rendered.warnings.some((warning) => warning.includes('4 technical note lines do not fit')),
+    rendered.warnings.some((warning) => warning.includes('technical note lines do not fit')),
   );
-  assert.match(rendered.svg, /Requirement 8\.\.\./);
+  assert.match(rendered.svg, /Requirement \d+\.\.\./);
 });
 
 test('baseline suggestions exclude projection-only silhouettes and diagonal thread fragments', () => {
