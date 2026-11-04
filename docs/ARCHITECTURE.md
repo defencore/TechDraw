@@ -18,6 +18,8 @@ The application is a static TypeScript/Vite project with a small shared data mod
 | `src/drawing/tolerances.ts`                                | Validation of explicit numeric deviations and manually entered fit designations                    |
 | `src/drawing/dimension-label.ts`                           | Shared nominal/tolerance text runs and bounds for rendering, picking and layout                    |
 | `src/drawing/dimension-geometry.ts`                        | Shared physical annotation primitives and bounds for SVG rendering and placement                   |
+| `src/drawing/grid-coordinates.ts`                          | Sheet grid validation and numeric quantization, independent of the interface                       |
+| `src/drawing/dimension-placement.ts`                       | Pure side placement, shared alignment and cascade spacing for selected annotation groups           |
 | `src/drawing/page-layout.ts`                               | Pure paper areas, standard scales, projection bounds, aligned view packing and fit checks          |
 | `src/drawing/layout.ts`                                    | Arrange annotations at each candidate scale and initialize their persistent physical layout        |
 | `src/drawing/render.ts`                                    | Serialize the physical layout, templates, geometry and annotations into an SVG sheet               |
@@ -30,10 +32,14 @@ The application is a static TypeScript/Vite project with a small shared data mod
 | `src/ui/drawing-toolbar.ts`                                | Compact floating icon dock with tooltips and separate viewport-control dock                        |
 | `src/ui/drawing-feedback.ts`                               | Persistent sheet warnings with layout and page-setup actions                                       |
 | `src/ui/dimension-editor.ts`                               | Compact selected-dimension panel with tolerance controls and optional position/text settings       |
+| `src/ui/dimension-placement-editor.ts`                     | Group selection, view selection, side actions, alignment mode and paper-spacing controls           |
 | `src/ui/viewport.ts`                                       | Pure fit, pan, cursor-anchored zoom and viewport/sheet coordinate conversion                       |
 | `src/ui/geometry-picking.ts`                               | Screen-radius picking of edges, endpoints and centres with model-coordinate references             |
 | `src/ui/dimension-picking.ts`                              | Screen-space picking of annotation labels and lines                                                |
+| `src/ui/dimension-selection.ts`                            | Annotation group membership and focus with explicit checkbox state and stale-ID pruning            |
 | `src/ui/dimension-drag.ts`                                 | Pure paper-space annotation dragging and draft positioning                                         |
+| `src/ui/drawing-grid.ts`                                   | Workspace-only paper grid rendering and paper-coordinate snapping                                  |
+| `src/ui/workspace-preferences.ts`                          | Strict browser persistence of independent grid visibility, snapping and spacing preferences        |
 | `src/ui/tolerance-editor.ts`                               | Tolerance-mode buttons, numeric/sign controls, draft preview and explicit Apply/Clear actions      |
 | `src/ui/tolerance-controller.ts`                           | Per-annotation raw drafts, editor lifecycle, validation, keyboard handling and explicit commits    |
 | `src/ui/title-block-editor.ts`                             | English editor for document data, sign-offs, changes, inventory and technical requirements         |
@@ -68,6 +74,12 @@ The title-block cache uses `techdraw:title-block` in local storage. It includes 
 The canvas has three coordinate spaces: model coordinates for measurements, paper millimetres for view placement and annotations, and viewport pixels for inspection. `viewport.ts` fits both paper dimensions inside the available canvas, then applies a relative zoom and pixel pan. Wheel zoom keeps the sheet point under the cursor fixed; resizing preserves the sheet point at the viewport centre and the relative fit zoom.
 
 Display zoom is clamped to 25–1600%. Space + drag, middle mouse drag, the hand tool, or dragging empty space in selection mode pans the sheet. `0` fits the sheet; `+` and `-` zoom around the viewport centre. These operations never change the model, drawing scale, annotation values or cached drawing layout.
+
+Grid preferences use the separate `techdraw:grid` browser-storage key. Visibility and snapping are independent booleans; spacing is a finite number from 0.1 to 100 paper millimetres, with a 5 mm default. Both visibility and snapping are off initially. Reading or saving whitelists those three values. Unavailable storage does not prevent editing, and invalid cached data receives fresh defaults. No grid preferences enter the project geometry, SVG or PDF output.
+
+`drawing-grid.ts` renders the grid into a workspace-only overlay clipped to the drawing area. It snaps annotation positions in global paper coordinates; geometry references and measured values remain unchanged. Display coarsening keeps low-zoom grids readable without changing the requested snapping step. Alt bypasses snapping while placing or dragging. Group dragging snaps the focused member, then applies the same paper displacement to every selected annotation to preserve relative spacing.
+
+`DimensionSelection` owns group membership and the focused annotation together. Shift/Ctrl-click toggles membership, plain selection of an existing member preserves its group, and checkbox changes explicitly set membership. Removing or regenerating dimensions prunes stale IDs and repairs focus. Group placement works separately for each view and compatible parallel orientation: horizontal dimensions move Top/Bottom, vertical dimensions Left/Right, radial labels to any side, and aligned dimensions to compatible sides. Angles are left unchanged. Cascade assigns separate lanes, while Align shares a baseline only for disjoint complete spans with enough label clearance. Nested or colliding spans retain separate lanes. Placement changes annotation positions while retaining the cached view layout and all measured geometry and specifications.
 
 Geometry and dimension picking use screen-pixel tolerances so their hit areas remain usable at different zoom levels. A compact floating dock exposes six visible dimension icons: Horizontal (`H`), Vertical (`V`), Aligned (`L`), Diameter (`D`), Radius (`R`) and Angle (`A`). Each icon has an accessible name, a tool/shortcut tooltip and an active state. A separate zoom dock contains viewport controls. Shortcuts are inactive while text fields are being edited. A new dimension follows a pick → draft preview → click-to-place interaction. Selecting a dimension opens its compact editing panel; existing labels and dimension lines can be dragged. `Esc` cancels the pending operation; undo/redo acts on committed dimension/layout snapshots.
 

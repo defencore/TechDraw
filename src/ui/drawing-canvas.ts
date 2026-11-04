@@ -1,3 +1,4 @@
+import { isGridSpacing } from '../drawing/grid-coordinates';
 import type {
   Dimension,
   DimensionKind,
@@ -13,6 +14,16 @@ import { createLinearDimension, measureAngle } from '../measurements';
 import { dragDimension, positionDimension } from './dimension-drag';
 import { pickDimension } from './dimension-picking';
 import { nearestPointOnEdge, pickGeometry, type GeometryPick } from './geometry-picking';
+import { drawingPage } from '../drawing/page-layout';
+import { dimensionGeometry } from '../drawing/dimension-geometry';
+import {
+  defaultGridSettings,
+  renderWorkspaceGrid,
+  snapDimensionToGrid,
+  snappedDragPoint,
+  visibleGridSpacing,
+  type GridSettings,
+} from './drawing-grid';
 import {
   fitViewport,
   getViewportTransform,
@@ -31,11 +42,13 @@ export interface CanvasDocument {
   settings: DrawingSettings;
   layout: DrawingLayout;
   selectedDimension?: string;
+  selectedDimensionIds?: readonly string[];
 }
 interface CanvasCallbacks {
-  select(id?: string): void;
+  select(id?: string, additive?: boolean): void;
   add(dimension: Dimension): void;
   edit(dimension: Dimension): void;
+  editMany(dimensions: Dimension[]): void;
   zoom(value: number): void;
   hint(message: string): void;
   error(message: string): void;
@@ -46,7 +59,9 @@ interface PointerGesture {
   startSheet: Point2;
   moved: boolean;
   dimension?: Dimension;
+  dimensions?: Dimension[];
   preview?: Dimension;
+  previews?: Dimension[];
   viewport?: ViewportState;
   click?: boolean;
 }
@@ -69,6 +84,7 @@ export class DrawingCanvas {
   private space = false;
   private pointerClient?: Point2;
   private enabled = true;
+  private grid = { ...defaultGridSettings };
   private touches = new Map<number, Point2>();
   private pinch?: { distance: number; midpoint: Point2; viewport: ViewportState };
   private readonly resize = new ResizeObserver(() => this.applyViewport());
@@ -137,6 +153,7 @@ export class DrawingCanvas {
       host.innerHTML = this.sheet.svg;
       this.element!.classList.add('has-sheet');
       this.applyViewport();
+      this.patchSelections();
       this.feedback();
     }
     this.hint();
@@ -146,6 +163,19 @@ export class DrawingCanvas {
   setEnabled(value: boolean): void {
     this.enabled = value;
     if (!value) this.cancel();
+  }
+  setGrid(settings: GridSettings): void {
+    if (
+      typeof settings.visible !== 'boolean' ||
+      typeof settings.snap !== 'boolean' ||
+      !isGridSpacing(settings.spacing)
+    )
+      throw new RangeError(
+        'Grid settings need boolean visibility/snapping and spacing 0.1–100 mm.',
+      );
+    this.grid = { ...settings };
+    this.patchGrid();
+    this.hint();
   }
   setTool(tool: CanvasTool): void {
     if (this.tool !== tool) this.cancel();
@@ -160,6 +190,14 @@ export class DrawingCanvas {
   }
   get zoom(): number {
     return this.viewport.zoom;
+  }
+  get gridDisplaySpacing(): number | undefined {
+    return this.grid.visible && this.metrics
+      ? visibleGridSpacing(
+          this.grid.spacing,
+          getViewportTransform(this.viewport, this.metrics).scale,
+        )
+      : undefined;
   }
   fit(): void {
     if (this.gesture?.dimension || this.pinch) return;
@@ -197,7 +235,7 @@ export class DrawingCanvas {
     this.draft = undefined;
     this.hovered = undefined;
     this.highlightDimension();
-    if (gesture?.dimension) this.patchDimension(gesture.dimension);
+    this.restoreGesture(gesture);
     if (gesture && this.element?.hasPointerCapture(gesture.pointerId))
       this.element.releasePointerCapture(gesture.pointerId);
     this.element?.classList.remove('panning', 'dimension-dragging');
@@ -233,7 +271,30 @@ export class DrawingCanvas {
       host.style.transform = `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`;
     }
     this.callbacks.zoom(this.viewport.zoom);
+    this.patchGrid();
     this.feedback();
+  }
+  private patchGrid(): void {
+    const svg = this.element?.querySelector<SVGSVGElement>('#paper-host > svg');
+    if (!svg || !this.document || !this.metrics) return;
+    let overlay = svg.querySelector<SVGGElement>('[data-workspace-grid]');
+    if (!this.grid.visible) {
+      overlay?.remove();
+      return;
+    }
+    if (!overlay) {
+      overlay = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      overlay.dataset.workspaceGrid = '';
+      overlay.setAttribute('pointer-events', 'none');
+      overlay.setAttribute('aria-hidden', 'true');
+      // The page background stays opaque; the grid sits behind all drawing primitives.
+      svg.insertBefore(overlay, svg.querySelector(':scope > g'));
+    }
+    overlay.innerHTML = renderWorkspaceGrid(
+      drawingPage(this.document.settings).content,
+      this.grid,
+      getViewportTransform(this.viewport, this.metrics).scale,
+    );
   }
   private local(event: { clientX: number; clientY: number }): Point2 {
     const rect = this.element!.getBoundingClientRect();
@@ -274,7 +335,7 @@ export class DrawingCanvas {
     if (event.pointerType === 'touch') {
       this.touches.set(event.pointerId, this.local(event));
       if (this.touches.size === 2) {
-        if (this.gesture?.dimension) this.patchDimension(this.gesture.dimension);
+        this.restoreGesture(this.gesture);
         this.gesture = undefined;
         const [a, b] = [...this.touches.values()];
         this.pinch = {
@@ -292,6 +353,34 @@ export class DrawingCanvas {
         ? this.dimensionAt(event)
         : undefined;
     const dimension = id ? this.document.dimensions.find((d) => d.id === id) : undefined;
+    let selected = this.selectedIds();
+    if (dimension) {
+      const additive = event.ctrlKey || event.metaKey || event.shiftKey;
+      if (additive && selected.has(dimension.id)) {
+        selected.delete(dimension.id);
+        this.document = {
+          ...this.document,
+          selectedDimensionIds: [...selected],
+          selectedDimension:
+            this.document.selectedDimension === dimension.id
+              ? [...selected].at(-1)
+              : this.document.selectedDimension,
+        };
+        this.callbacks.select(dimension.id, true);
+        this.patchSelections();
+        event.preventDefault();
+        return;
+      }
+      if (additive) selected.add(dimension.id);
+      else if (!selected.has(dimension.id)) selected = new Set([dimension.id]);
+      this.document = {
+        ...this.document,
+        selectedDimension: dimension.id,
+        selectedDimensionIds: [...selected],
+      };
+      this.callbacks.select(dimension.id, additive);
+      this.patchSelections();
+    }
     const pan =
       this.space ||
       this.tool === 'pan' ||
@@ -303,7 +392,12 @@ export class DrawingCanvas {
       startSheet: this.sheetPoint(event),
       moved: false,
       ...(dimension
-        ? { dimension: structuredClone(dimension) }
+        ? {
+            dimension: structuredClone(dimension),
+            dimensions: structuredClone(
+              this.document.dimensions.filter((item) => selected.has(item.id)),
+            ),
+          }
         : pan
           ? { viewport: structuredClone(this.viewport) }
           : { click: true }),
@@ -311,9 +405,6 @@ export class DrawingCanvas {
     this.element.setPointerCapture(event.pointerId);
     event.preventDefault();
     if (dimension) {
-      this.document = { ...this.document, selectedDimension: dimension.id };
-      this.callbacks.select(dimension.id);
-      this.patchSelections();
       this.element.classList.add('dimension-dragging');
     } else if (pan) this.element.classList.add('panning');
   };
@@ -349,23 +440,12 @@ export class DrawingCanvas {
         this.viewport = panViewport(gesture.viewport, [dx, dy]);
         this.applyViewport(false);
       } else if (gesture.dimension && this.sheet) {
-        gesture.preview = dragDimension(
-          gesture.dimension,
-          gesture.startSheet,
-          this.sheetPoint(event),
-          this.sheet.viewTransforms[gesture.dimension.viewId],
-        );
-        this.patchDimension(gesture.preview);
+        this.previewDrag(gesture, event);
       }
       return;
     }
     if (this.draft && this.sheet) {
-      this.draft = positionDimension(
-        this.draft,
-        this.sheetPoint(event),
-        this.sheet.viewTransforms[this.draft.viewId],
-        this.document.settings.precision,
-      );
+      this.draft = this.positionDraft(this.draft, event);
       this.scheduleFeedback();
       return;
     }
@@ -405,9 +485,13 @@ export class DrawingCanvas {
       this.element.releasePointerCapture(event.pointerId);
     this.element?.classList.remove('panning', 'dimension-dragging');
     if (gesture.dimension && gesture.moved && gesture.preview) {
-      if (this.dimensionFits(gesture.preview)) this.callbacks.edit(gesture.preview);
-      else {
-        this.patchDimension(gesture.dimension);
+      this.previewDrag(gesture, event);
+      const previews = gesture.previews ?? [gesture.preview];
+      if (previews.every((dimension) => this.dimensionFits(dimension))) {
+        if (previews.length > 1) this.callbacks.editMany(previews);
+        else this.callbacks.edit(gesture.preview);
+      } else {
+        this.restoreGesture(gesture);
         this.callbacks.error(
           'Keep the dimension inside the drawing frame. Pan or use Fit to choose another position.',
         );
@@ -420,15 +504,21 @@ export class DrawingCanvas {
       !this.space &&
       event.button === 0
     ) {
-      this.document = { ...this.document!, selectedDimension: undefined };
-      this.callbacks.select();
+      const additive = event.ctrlKey || event.metaKey || event.shiftKey;
+      if (additive) return;
+      this.document = {
+        ...this.document!,
+        selectedDimension: undefined,
+        selectedDimensionIds: [],
+      };
+      this.callbacks.select(undefined, false);
       this.patchSelections();
     }
   };
   private pointerCancel = (event: PointerEvent): void => {
     this.touches.delete(event.pointerId);
     if (this.gesture?.pointerId !== event.pointerId && !this.pinch) return;
-    if (this.gesture?.dimension) this.patchDimension(this.gesture.dimension);
+    this.restoreGesture(this.gesture);
     this.gesture = undefined;
     this.pinch = undefined;
     this.element?.classList.remove('panning', 'dimension-dragging');
@@ -451,12 +541,7 @@ export class DrawingCanvas {
   private chooseGeometry(event: PointerEvent): void {
     if (!this.document || !this.sheet) return;
     if (this.draft) {
-      const dimension = positionDimension(
-        this.draft,
-        this.sheetPoint(event),
-        this.sheet.viewTransforms[this.draft.viewId],
-        this.document.settings.precision,
-      );
+      const dimension = this.positionDraft(this.draft, event);
       if (!this.dimensionFits(dimension)) {
         this.callbacks.error(
           'Place the dimension inside the drawing frame. Pan or use Fit to find the page.',
@@ -537,12 +622,7 @@ export class DrawingCanvas {
           );
       }
       if (dimension) {
-        this.draft = positionDimension(
-          dimension,
-          this.sheetPoint(event),
-          this.sheet.viewTransforms[dimension.viewId],
-          this.document.settings.precision,
-        );
+        this.draft = this.positionDraft(dimension, event);
         this.hovered = undefined;
       }
     } catch (error) {
@@ -552,6 +632,55 @@ export class DrawingCanvas {
     }
     this.feedback();
     this.hint();
+  }
+
+  private positionDraft(dimension: Dimension, event: PointerEvent): Dimension {
+    const transform = this.sheet!.viewTransforms[dimension.viewId];
+    const placed = positionDimension(
+      dimension,
+      this.sheetPoint(event),
+      transform,
+      this.document!.settings.precision,
+    );
+    return event.altKey
+      ? placed
+      : snapDimensionToGrid(placed, transform, this.document!.settings.precision, this.grid);
+  }
+
+  private previewDrag(gesture: PointerGesture, event: PointerEvent): void {
+    if (!gesture.dimension || !this.sheet || !this.document) return;
+    let current = this.sheetPoint(event);
+    if (!event.altKey)
+      current = snappedDragPoint(
+        gesture.dimension,
+        gesture.startSheet,
+        current,
+        this.sheet.viewTransforms[gesture.dimension.viewId],
+        this.document.settings.precision,
+        this.grid,
+      );
+    gesture.previews = (gesture.dimensions ?? [gesture.dimension]).map((dimension) =>
+      dragDimension(
+        dimension,
+        gesture.startSheet,
+        current,
+        this.sheet!.viewTransforms[dimension.viewId],
+      ),
+    );
+    gesture.preview = gesture.previews.find((dimension) => dimension.id === gesture.dimension!.id);
+    for (const dimension of gesture.previews) this.patchDimension(dimension);
+  }
+
+  private restoreGesture(gesture?: PointerGesture): void {
+    for (const dimension of gesture?.dimensions ?? (gesture?.dimension ? [gesture.dimension] : []))
+      this.patchDimension(dimension);
+  }
+
+  private selectedIds(): Set<string> {
+    return new Set(
+      this.document?.selectedDimensionIds ??
+        (this.document?.selectedDimension ? [this.document.selectedDimension] : []),
+    );
   }
 
   private patchDimension(dimension: Dimension): void {
@@ -564,21 +693,22 @@ export class DrawingCanvas {
         dimension,
         this.sheet.viewTransforms[dimension.viewId],
         this.document.settings.precision,
-        dimension.id === this.document.selectedDimension,
+        this.selectedIds().has(dimension.id),
       );
   }
   private dimensionFits(dimension: Dimension): boolean {
-    if (!this.document) return false;
-    const sheet = renderDrawing(
-      this.document.part,
-      [dimension],
-      this.document.settings,
-      undefined,
-      this.document.layout,
-    );
-    return !sheet.warnings.some(
-      (warning) =>
-        warning.startsWith('Dimensions exceed') || warning.startsWith('The selected scale'),
+    if (!this.document || !this.sheet) return false;
+    const frame = drawingPage(this.document.settings).content;
+    const bounds = dimensionGeometry(
+      dimension,
+      this.sheet.viewTransforms[dimension.viewId],
+      this.document.settings.precision,
+    ).bounds;
+    return (
+      bounds.minX >= frame.minX &&
+      bounds.maxX <= frame.maxX &&
+      bounds.minY >= frame.minY &&
+      bounds.maxY <= frame.maxY
     );
   }
   private patchSelections(): void {
@@ -637,22 +767,23 @@ export class DrawingCanvas {
         : '');
   }
   private hint(): void {
+    const message = this.draft
+      ? 'Click to place the dimension · Esc to cancel · Wheel to zoom'
+      : this.tool === 'pan'
+        ? 'Drag to pan · Wheel to zoom under the cursor · Fit to show the sheet'
+        : this.tool === 'select'
+          ? 'Drag dimensions to move them · Shift / Ctrl-click to select a group · Wheel to zoom · Space + drag to pan'
+          : this.tool === 'angle'
+            ? this.pendingEdge
+              ? 'Choose the second straight edge in the same view'
+              : 'Choose two straight edges, then click to place the angle'
+            : this.tool === 'diameter' || this.tool === 'radius'
+              ? 'Choose a circular edge, then click to place the dimension'
+              : this.pendingPoint
+                ? 'Choose the second snap point in the same view'
+                : 'Choose a straight edge or two snap points, then click to place the dimension';
     this.callbacks.hint(
-      this.draft
-        ? 'Click to place the dimension · Esc to cancel · Wheel to zoom'
-        : this.tool === 'pan'
-          ? 'Drag to pan · Wheel to zoom under the cursor · Fit to show the sheet'
-          : this.tool === 'select'
-            ? 'Drag a dimension to move it · Wheel to zoom · Drag empty space or Space + drag to pan'
-            : this.tool === 'angle'
-              ? this.pendingEdge
-                ? 'Choose the second straight edge in the same view'
-                : 'Choose two straight edges, then click to place the angle'
-              : this.tool === 'diameter' || this.tool === 'radius'
-                ? 'Choose a circular edge, then click to place the dimension'
-                : this.pendingPoint
-                  ? 'Choose the second snap point in the same view'
-                  : 'Choose a straight edge or two snap points, then click to place the dimension',
+      message + (this.grid.snap && this.tool !== 'pan' ? ' · Alt to bypass grid' : ''),
     );
   }
 }

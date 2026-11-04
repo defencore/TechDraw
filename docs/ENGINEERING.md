@@ -59,6 +59,9 @@ Useful primary references:
 - [FreeCAD TechDraw view and precision modes](https://github.com/FreeCAD/FreeCAD-documentation/blob/main/wiki/TechDraw_View.md)
 - [FreeCAD dimensions and projected geometry](https://github.com/FreeCAD/FreeCAD-documentation/blob/main/wiki/TechDraw_General_Examples.md)
 - [FreeCAD true and projected length dimensions](https://github.com/FreeCAD/FreeCAD-documentation/blob/main/wiki/TechDraw_LengthDimension.md)
+- [FreeCAD common-line dimension alignment](https://github.com/FreeCAD/FreeCAD-documentation/blob/main/wiki/TechDraw_ExtensionPosHorizChainDimension.md)
+- [FreeCAD cascade spacing](https://github.com/FreeCAD/FreeCAD-documentation/blob/main/wiki/TechDraw_ExtensionCascadeHorizDimension.md)
+- [FreeCAD grid preferences](https://github.com/FreeCAD/FreeCAD-documentation/blob/main/wiki/TechDraw_Preferences.md#grid) and [temporary Alt snapping bypass](https://github.com/FreeCAD/FreeCAD-documentation/blob/main/wiki/TechDraw_Workbench.md#snapping)
 
 No FreeCAD source code or templates are copied merely by following these concepts. Dependencies retain their own licenses.
 

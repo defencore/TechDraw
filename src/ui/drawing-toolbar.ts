@@ -1,5 +1,6 @@
 import type { DimensionKind } from '../model';
 import { button } from './components';
+import type { GridSettings } from './drawing-grid';
 
 export const dimensionTools: {
   id: DimensionKind;
@@ -51,6 +52,7 @@ interface ToolbarContext {
   canUndo: boolean;
   canRedo: boolean;
   zoomOptions: string;
+  grid: GridSettings;
 }
 
 export function renderWorkspaceControls({
@@ -59,6 +61,7 @@ export function renderWorkspaceControls({
   canUndo,
   canRedo,
   zoomOptions,
+  grid,
 }: ToolbarContext): string {
   const control = (
     action: string,
@@ -89,5 +92,6 @@ export function renderWorkspaceControls({
     ${divider}
     <div class="dock-group history-tools" role="group" aria-label="History">${control('undo', 'Undo', 'undo', { disabled: !canUndo, shortcut: 'Control+Z Meta+Z', keyHint: 'Ctrl/⌘ Z' })}${control('redo', 'Redo', 'redo', { disabled: !canRedo, shortcut: 'Control+Shift+Z Meta+Shift+Z', keyHint: 'Ctrl/⌘ Shift Z' })}</div>
   </div>
+  <div class="grid-dock" role="toolbar" aria-label="Grid controls"><span id="grid-density" class="grid-density" hidden></span>${control('toggle-grid', 'Show grid', 'grid', { selected: grid.visible, shortcut: 'G' })}${control('toggle-grid-snap', 'Snap to grid', 'magnet', { selected: grid.snap, shortcut: 'S' })}<span class="dock-divider" aria-hidden="true"></span><label class="grid-step"><input id="grid-spacing" aria-label="Grid step in millimetres on paper" type="number" min="0.1" max="100" step="0.1" value="${grid.spacing}" list="grid-presets" ${enabled ? '' : 'disabled'}/><span>mm</span></label><datalist id="grid-presets">${[1, 2, 5, 10, 20].map((value) => `<option value="${value}"></option>`).join('')}</datalist></div>
   <div class="viewport-dock" role="toolbar" aria-label="View controls">${control('zoom-out', 'Zoom out', 'minus', { keyHint: '-' })}<select id="zoom" aria-label="Sheet zoom" ${enabled ? '' : 'disabled'}>${zoomOptions}</select>${control('zoom-in', 'Zoom in', 'plus', { keyHint: '+' })}${divider}${control('fit', 'Fit sheet', 'fit', { shortcut: '0' })}</div>`;
 }

@@ -4,6 +4,12 @@ import { autoDimensions } from './drawing/dimensions';
 import { refreshDimensionSuggestions } from './drawing/suggestions';
 import { renderDrawingFeedback } from './ui/drawing-feedback';
 import { ToleranceEditorController } from './ui/tolerance-controller';
+import { DimensionSelection } from './ui/dimension-selection';
+import type { GridSettings } from './ui/drawing-grid';
+import { isGridSpacing } from './drawing/grid-coordinates';
+import { readGridPreferences, saveGridPreferences } from './ui/workspace-preferences';
+import type { PlacementControls } from './ui/dimension-placement-editor';
+import { applyDimensionPlacement, type PlacementSide } from './drawing/dimension-placement';
 import { renderWorkspaceControls, dimensionTools } from './ui/drawing-toolbar';
 import { initializeDrawing } from './drawing/layout';
 import { titleBlockDefaults, cleanTitleBlockText } from './drawing/title-block-data';
@@ -47,7 +53,9 @@ let theme = readPreference<string>(
 );
 let inspectorTab = 'dimensions';
 let tool: CanvasTool = 'select';
-let selectedDimension: string | undefined;
+const dimensionSelection = new DimensionSelection();
+let grid = readGridPreferences(titleBlockStorage);
+const placement: PlacementControls = { view: 'front', mode: 'cascade', gap: 7 };
 let busy = false;
 let busyOperation: 'import' | 'export' = 'import';
 let autoDetail: 'balanced' | 'full' = 'balanced';
@@ -73,7 +81,7 @@ const history = () => {
 };
 const toleranceEditor = new ToleranceEditorController({
   getSelection() {
-    const dimension = dims().find((item) => item.id === selectedDimension);
+    const dimension = dims().find((item) => item.id === dimensionSelection.focus);
     return state.activeId && dimension ? { partId: state.activeId, dimension } : undefined;
   },
   precision: () => state.settings.precision,
@@ -91,11 +99,10 @@ const toleranceEditor = new ToleranceEditorController({
 });
 
 const drawingCanvas = new DrawingCanvas({
-  select(id) {
-    const refresh = selectedDimension !== id || inspectorTab !== 'dimensions';
-    selectedDimension = id;
+  select(id, additive = false) {
+    dimensionSelection.select(id, additive);
     inspectorTab = 'dimensions';
-    if (refresh) refreshInspector();
+    refreshInspector();
   },
   add: addDimension,
   edit(dimension) {
@@ -105,9 +112,18 @@ const drawingCanvas = new DrawingCanvas({
       true,
     );
   },
+  editMany(dimensions) {
+    const edits = new Map(dimensions.map((dimension) => [dimension.id, dimension]));
+    changeDimensions(
+      dims().map((dimension) => edits.get(dimension.id) ?? dimension),
+      false,
+      true,
+    );
+  },
   zoom() {
     const select = document.querySelector<HTMLSelectElement>('#zoom');
     if (select) select.innerHTML = zoomOptions();
+    updateGridDensity();
   },
   hint(message) {
     const label = dimensionTools.find((item) => item.id === tool)?.label;
@@ -133,7 +149,9 @@ function refreshInspector(): void {
   const views = createWorkspaceViews({
     state,
     inspectorTab,
-    selectedDimension,
+    selectedDimension: dimensionSelection.focus,
+    selectedDimensionIds: dimensionSelection.ids,
+    placement,
     autoDetail,
     collapsedBranches,
   });
@@ -184,13 +202,16 @@ function toast(message: string): void {
 
 function render(): void {
   toleranceEditor.capture(app);
+  dimensionSelection.retain(dims().map((dimension) => dimension.id));
   document.documentElement.dataset.theme = theme;
   const retainedCanvas = app.querySelector<HTMLElement>('#canvas-area');
   const part = active();
   const views = createWorkspaceViews({
     state,
     inspectorTab,
-    selectedDimension,
+    selectedDimension: dimensionSelection.focus,
+    selectedDimensionIds: dimensionSelection.ids,
+    placement,
     autoDetail,
     collapsedBranches,
   });
@@ -213,7 +234,7 @@ function render(): void {
       <main class="drawing-workspace">
         <div class="workspace-heading"><div><div class="eyebrow">DRAWING WORKSPACE</div><h1>${part ? e(part.name) : 'From solid to sheet'}</h1></div><div class="export-group">${button('export-svg', 'SVG', undefined, 'secondary compact', !part || busy ? 'disabled' : '')}${button('export-pdf', `Export PDF${state.selected.size > 1 ? ` · ${state.selected.size}` : ''}`, 'download', 'primary', !state.selected.size || busy ? 'disabled' : '')}</div></div>
         <div id="workspace-feedback" role="status" aria-live="polite" hidden></div>
-        <div class="canvas-shell">${renderWorkspaceControls({ tool, enabled: Boolean(part) && !busy, canUndo: Boolean(history()?.canUndo), canRedo: Boolean(history()?.canRedo), zoomOptions: zoomOptions() })}
+        <div class="canvas-shell">${renderWorkspaceControls({ tool, enabled: Boolean(part) && !busy, canUndo: Boolean(history()?.canUndo), canRedo: Boolean(history()?.canRedo), zoomOptions: zoomOptions(), grid })}
         <div class="canvas-area ${!['select', 'pan'].includes(tool) ? 'measuring' : ''}" id="canvas-area" tabindex="0" aria-label="Drawing canvas. Wheel to zoom, drag empty space to pan."><div class="drop-overlay">${icon('upload')}Drop STEP files to import</div><div id="paper-host"></div>${!part ? views.renderEmpty() : ''}</div>
         </div><div class="canvas-status"><span id="tool-hint">${e(canvasHint)}</span><span>${part ? `${state.settings.format} · ${state.settings.orientation} · mm` : 'STEP / STP · Multiple files supported'}</span></div>
       </main>
@@ -234,6 +255,7 @@ function render(): void {
   drawingCanvas.attach(canvas);
   drawingCanvas.setEnabled(!busy && !helpOpen);
   drawingCanvas.setTool(tool);
+  drawingCanvas.setGrid(grid);
   renderPaper();
   toleranceEditor.restore(app);
   updateCacheStatus();
@@ -261,7 +283,8 @@ function renderPaper(): void {
           dimensions: dims(),
           settings: state.settings,
           layout: layout!,
-          selectedDimension,
+          selectedDimension: dimensionSelection.focus,
+          selectedDimensionIds: [...dimensionSelection.ids],
         }
       : undefined,
   );
@@ -314,7 +337,7 @@ function setTool(value: CanvasTool): void {
   tool = value;
   drawingCanvas.setTool(value);
   if (value !== 'select' && value !== 'pan') {
-    selectedDimension = undefined;
+    dimensionSelection.clear();
     inspectorTab = 'dimensions';
     refreshInspector();
     renderPaper();
@@ -332,11 +355,12 @@ function changeDimensions(next: Dimension[], arrange = false, preserveEditor = f
     pendingArrangement.add(state.activeId!);
   }
   state.dimensions[state.activeId!] = next;
+  dimensionSelection.retain(next.map((dimension) => dimension.id));
   if (preserveEditor) {
     renderPaper();
     updateUndoControls();
     const offset = app.querySelector<HTMLInputElement>('[data-dimension-setting="offset"]');
-    const dimension = next.find((d) => d.id === selectedDimension);
+    const dimension = next.find((d) => d.id === dimensionSelection.focus);
     if (offset && dimension) offset.value = dimension.offset.toFixed(1);
   } else render();
 }
@@ -374,8 +398,8 @@ let paperUpdateTimer: ReturnType<typeof setTimeout> | undefined;
 let dimensionInputSession: { element: HTMLInputElement; recorded: boolean } | undefined;
 function updateDimensionControl(control: HTMLInputElement): void {
   const key = control.dataset.dimensionSetting as 'offset' | 'prefix' | 'suffix' | undefined;
-  if (!key || !selectedDimension) return;
-  const current = dims().find((d) => d.id === selectedDimension);
+  if (!key || !dimensionSelection.focus) return;
+  const current = dims().find((d) => d.id === dimensionSelection.focus);
   if (!current) return;
   const value = key === 'offset' ? Number(control.value) : control.value.slice(0, 120);
   if (
@@ -391,7 +415,7 @@ function updateDimensionControl(control: HTMLInputElement): void {
     dimensionInputSession.recorded = true;
   }
   const next = structuredClone(dims()),
-    dimension = next.find((d) => d.id === selectedDimension)!;
+    dimension = next.find((d) => d.id === dimensionSelection.focus)!;
   if (key === 'offset') dimension.offset = Number(value);
   else dimension[key] = String(value);
   state.dimensions[state.activeId!] = next;
@@ -414,7 +438,7 @@ app.addEventListener('focusout', (event) => {
       !Number.isFinite(Number(control.value)) ||
       Math.abs(Number(control.value)) > 1000)
   ) {
-    const dimension = dims().find((d) => d.id === selectedDimension);
+    const dimension = dims().find((d) => d.id === dimensionSelection.focus);
     if (dimension) control.value = dimension.offset.toFixed(1);
     toast('Use an offset between -1000 and 1000 mm.');
   }
@@ -422,6 +446,16 @@ app.addEventListener('focusout', (event) => {
 });
 app.addEventListener('input', (event) => {
   const control = event.target as HTMLInputElement | HTMLTextAreaElement;
+  if (control.id === 'grid-spacing') {
+    const spacing = Number(control.value);
+    if (control.value.trim() && isGridSpacing(spacing)) updateGrid({ ...grid, spacing });
+    return;
+  }
+  if (control.id === 'placement-gap') {
+    const gap = Number(control.value);
+    if (control.value.trim() && Number.isFinite(gap) && gap >= 7 && gap <= 100) placement.gap = gap;
+    return;
+  }
   if (toleranceEditor.handleInput(control)) return;
   if (control instanceof HTMLInputElement && control.dataset.dimensionSetting) {
     updateDimensionControl(control);
@@ -479,7 +513,7 @@ async function importFiles(files: File[]): Promise<void> {
       busy = false;
       if (firstAddedId) {
         state.activeId = firstAddedId;
-        selectedDimension = undefined;
+        dimensionSelection.clear();
         tool = 'select';
       }
       render();
@@ -594,7 +628,7 @@ async function openProject(file: File): Promise<void> {
     state.activeId = state.parts[0].id;
     state.selected = new Set(data.selected);
     histories.clear();
-    selectedDimension = undefined;
+    dimensionSelection.clear();
     tool = 'select';
     render();
     toast('Editable project opened.');
@@ -605,17 +639,81 @@ async function openProject(file: File): Promise<void> {
 
 function addDimension(d: Dimension): void {
   tool = 'select';
-  selectedDimension = d.id;
+  dimensionSelection.replace([d.id]);
   inspectorTab = 'dimensions';
   changeDimensions([...dims(), d]);
   toast('Dimension added. Drag its label or line to adjust it.');
+}
+
+function updateGrid(next: GridSettings): void {
+  grid = next;
+  saveGridPreferences(grid, titleBlockStorage);
+  drawingCanvas.setGrid(grid);
+  updateGridDensity();
+  for (const [action, value] of [
+    ['toggle-grid', grid.visible],
+    ['toggle-grid-snap', grid.snap],
+  ] as const) {
+    const control = app.querySelector<HTMLButtonElement>(`[data-action="${action}"]`);
+    control?.classList.toggle('active', value);
+    control?.setAttribute('aria-pressed', String(value));
+  }
+}
+
+function updateGridDensity(): void {
+  const label = app.querySelector<HTMLElement>('#grid-density');
+  if (!label) return;
+  const shown = drawingCanvas.gridDisplaySpacing;
+  label.hidden = shown === undefined || shown <= grid.spacing + 1e-8;
+  label.textContent = shown === undefined ? '' : `${Number(shown.toPrecision(6))} mm shown`;
+  label.title = `Zoom in for finer grid lines. Snapping still uses ${grid.spacing} mm.`;
+}
+
+function placeSelectedDimensions(side: PlacementSide): void {
+  const part = active();
+  if (!part || !dimensionSelection.ids.size || busy) return;
+  const layout = getPartLayout(part);
+  try {
+    const result = applyDimensionPlacement(dims(), new Set(dimensionSelection.ids), part, layout, {
+      side,
+      mode: placement.mode,
+      gap: placement.gap,
+      gridSpacing: grid.snap ? grid.spacing : undefined,
+      precision: state.settings.precision,
+    });
+    if (!result.placedIds.length) {
+      toast(
+        'Choose top or bottom for horizontal dimensions, left or right for vertical dimensions. Radius and diameter support any side.',
+      );
+      return;
+    }
+    const preview = renderDrawing(part, result.dimensions, state.settings, undefined, layout);
+    if (preview.warnings.some((warning) => warning.startsWith('Dimensions exceed'))) {
+      toast(
+        'This arrangement would leave the drawing frame. Use a smaller gap, another side or a larger sheet.',
+      );
+      return;
+    }
+    drawingCanvas.cancel();
+    if (JSON.stringify(result.dimensions) === JSON.stringify(dims())) {
+      toast('Selected dimensions are already in this arrangement.');
+      return;
+    }
+    changeDimensions(result.dimensions);
+    const skipped = result.unsupportedIds.length;
+    toast(
+      `${result.placedIds.length} dimensions ${placement.mode === 'align' ? 'aligned' : 'cascaded'} ${side}.${skipped ? ` ${skipped} are incompatible with this side; angles keep their position.` : ''} Undo restores their positions.`,
+    );
+  } catch (error) {
+    toast(errorMessage(error));
+  }
 }
 
 function refreshAutomaticDimensions(): void {
   const part = active();
   if (!part) return;
   const refreshed = refreshDimensionSuggestions(part, dims(), autoDetail);
-  selectedDimension = undefined;
+  dimensionSelection.clear();
   drawingCanvas.cancel();
   changeDimensions(refreshed.dimensions, true);
   toast(
@@ -678,6 +776,25 @@ app.addEventListener('click', (event) => {
           ? new Set()
           : new Set(state.parts.map((p) => p.id));
       render();
+    } else if (action === 'toggle-grid') updateGrid({ ...grid, visible: !grid.visible });
+    else if (action === 'toggle-grid-snap') updateGrid({ ...grid, snap: !grid.snap });
+    else if (action === 'select-view-dimensions') {
+      drawingCanvas.cancel();
+      dimensionSelection.replace(
+        dims()
+          .filter((dimension) => dimension.viewId === placement.view)
+          .map((dimension) => dimension.id),
+      );
+      tool = 'select';
+      render();
+    } else if (action === 'clear-dimension-selection') {
+      drawingCanvas.cancel();
+      dimensionSelection.clear();
+      render();
+    } else if (action.startsWith('place-dimensions:')) {
+      const side = action.slice('place-dimensions:'.length);
+      if (['left', 'right', 'top', 'bottom'].includes(side))
+        placeSelectedDimensions(side as PlacementSide);
     } else if (action === 'fit') {
       drawingCanvas.fit();
     } else if (action === 'zoom-in') drawingCanvas.zoomBy(1.25);
@@ -697,13 +814,13 @@ app.addEventListener('click', (event) => {
         state.dimensions[state.activeId!] = result.dimensions;
         if (result.layout) state.layouts[state.activeId!] = result.layout;
         else delete state.layouts[state.activeId!];
-        selectedDimension = undefined;
+        dimensionSelection.retain(result.dimensions.map((dimension) => dimension.id));
         render();
       }
-    } else if (action === 'delete-dimension' && selectedDimension) {
-      const id = selectedDimension;
+    } else if (action === 'delete-dimension' && dimensionSelection.focus) {
+      const id = dimensionSelection.focus;
       toleranceEditor.clearDimension(state.activeId!, id);
-      selectedDimension = undefined;
+      dimensionSelection.clear();
       changeDimensions(dims().filter((d) => d.id !== id));
     } else if (action === 'cancel') {
       importToken++;
@@ -734,7 +851,7 @@ app.addEventListener('click', (event) => {
     drawingCanvas.cancel();
     histories.delete(removeId);
     if (state.activeId === removeId) state.activeId = state.parts[0]?.id ?? null;
-    selectedDimension = undefined;
+    dimensionSelection.clear();
     tool = 'select';
     render();
     return;
@@ -743,18 +860,14 @@ app.addEventListener('click', (event) => {
   if (partId) {
     drawingCanvas.cancel();
     state.activeId = partId;
-    selectedDimension = undefined;
+    dimensionSelection.clear();
     render();
     return;
   }
   const dimensionId =
     target.closest<HTMLElement>('[data-dimension-select]')?.dataset.dimensionSelect;
   if (dimensionId) {
-    if (dimensionId === selectedDimension && inspectorTab === 'dimensions') {
-      setTool('select');
-      return;
-    }
-    selectedDimension = dimensionId;
+    dimensionSelection.select(dimensionId, event.shiftKey || event.ctrlKey || event.metaKey);
     inspectorTab = 'dimensions';
     tool = 'select';
     drawingCanvas.setTool('select');
@@ -764,6 +877,36 @@ app.addEventListener('click', (event) => {
 
 app.addEventListener('change', (event) => {
   const target = event.target as HTMLInputElement;
+  if (target.dataset.dimensionCheck) {
+    drawingCanvas.cancel();
+    dimensionSelection.set(target.dataset.dimensionCheck, target.checked);
+    inspectorTab = 'dimensions';
+    tool = 'select';
+    render();
+    return;
+  }
+  if (target.id === 'placement-view') {
+    placement.view = target.value as PlacementControls['view'];
+    return;
+  }
+  if (target.id === 'placement-mode') {
+    placement.mode = target.value as PlacementControls['mode'];
+    return;
+  }
+  if (target.id === 'placement-gap') {
+    const gap = Number(target.value);
+    if (target.value.trim() && Number.isFinite(gap) && gap >= 7 && gap <= 100) placement.gap = gap;
+    else toast('Enter a minimum gap from 7 to 100 mm on paper.');
+    target.value = String(placement.gap);
+    return;
+  }
+  if (target.id === 'grid-spacing') {
+    const spacing = Number(target.value);
+    if (target.value.trim() && isGridSpacing(spacing)) updateGrid({ ...grid, spacing });
+    else toast('Enter a grid step from 0.1 to 100 mm on paper.');
+    target.value = String(grid.spacing);
+    return;
+  }
   if (target.id === 'file-input') {
     void importFiles(Array.from(target.files ?? []));
     target.value = '';
@@ -804,7 +947,7 @@ app.addEventListener('change', (event) => {
       status.textContent = `${state.settings.format} · ${state.settings.orientation} · mm`;
     return;
   }
-  if (target.dataset.dimensionSetting && selectedDimension) updateDimensionControl(target);
+  if (target.dataset.dimensionSetting && dimensionSelection.focus) updateDimensionControl(target);
 });
 
 app.addEventListener(
@@ -871,6 +1014,15 @@ window.addEventListener('keydown', (event) => {
   }
   if (editing) return;
   if (!event.ctrlKey && !event.metaKey && !event.altKey && !helpOpen) {
+    if (active() && !busy && (event.key.toLowerCase() === 'g' || event.key.toLowerCase() === 's')) {
+      event.preventDefault();
+      updateGrid(
+        event.key.toLowerCase() === 'g'
+          ? { ...grid, visible: !grid.visible }
+          : { ...grid, snap: !grid.snap },
+      );
+      return;
+    }
     const shortcut = dimensionTools.find(
       (item) => item.shortcut.toLowerCase() === event.key.toLowerCase(),
     );
@@ -913,7 +1065,7 @@ window.addEventListener('keydown', (event) => {
       .querySelector<HTMLButtonElement>(`[data-action="${event.shiftKey ? 'redo' : 'undo'}"]`)
       ?.click();
   }
-  if ((event.key === 'Delete' || event.key === 'Backspace') && selectedDimension) {
+  if ((event.key === 'Delete' || event.key === 'Backspace') && dimensionSelection.focus) {
     event.preventDefault();
     document.querySelector<HTMLButtonElement>('[data-action="delete-dimension"]')?.click();
   }

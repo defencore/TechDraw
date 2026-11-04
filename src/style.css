@@ -607,8 +607,6 @@ h1 {
   position: relative;
   border-top: 1px solid var(--border);
   background-color: var(--canvas);
-  background-image: radial-gradient(var(--dot) 0.8px, transparent 0.8px);
-  background-size: 18px 18px;
 }
 .canvas-shell::before {
   content: '';
@@ -619,7 +617,8 @@ h1 {
   pointer-events: none;
 }
 .workspace-dock,
-.viewport-dock {
+.viewport-dock,
+.grid-dock {
   position: absolute;
   z-index: 5;
   display: flex;
@@ -634,7 +633,8 @@ h1 {
     0 12px 35px #10251a0a;
 }
 :root[data-theme='dark'] .workspace-dock,
-:root[data-theme='dark'] .viewport-dock {
+:root[data-theme='dark'] .viewport-dock,
+:root[data-theme='dark'] .grid-dock {
   box-shadow:
     0 4px 14px #0003,
     0 12px 35px #0002;
@@ -798,6 +798,55 @@ h1 {
 .viewport-dock option {
   background: var(--surface);
   color: var(--ink);
+}
+.grid-dock {
+  left: 12px;
+  bottom: 12px;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 10px;
+}
+.grid-dock .dock-button {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+}
+.grid-dock .dock-tooltip {
+  top: auto;
+  bottom: calc(100% + 10px);
+  left: 0;
+  transform: none;
+}
+.grid-step {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-right: 7px;
+  color: var(--muted);
+  font-size: 10px;
+}
+.grid-density {
+  position: absolute;
+  bottom: calc(100% + 5px);
+  left: 0;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 9px;
+  white-space: nowrap;
+}
+.grid-step input {
+  width: 53px;
+  min-height: 28px;
+  padding: 3px 4px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-size: 11px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 @container (max-width: 540px) {
   .canvas-shell {
@@ -1464,8 +1513,112 @@ h1 {
   overflow-wrap: anywhere;
 }
 .dimension-list {
-  max-height: 180px;
+  max-height: 230px;
   overflow: auto;
+}
+.placement-editor {
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-subtle);
+}
+.placement-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.selection-count {
+  color: var(--accent);
+  font-size: 10px;
+  white-space: nowrap;
+}
+.selection-tools {
+  display: flex;
+  align-items: flex-end;
+  gap: 5px;
+  margin-bottom: 12px;
+}
+.selection-tools .field {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+.selection-tools button {
+  min-height: 33px;
+  padding: 5px 7px;
+  font-size: 10px;
+}
+.placement-editor .field-row {
+  gap: 8px;
+  margin-bottom: 12px;
+  align-items: flex-end;
+}
+.placement-editor .field-row .field {
+  margin-bottom: 0;
+}
+.placement-editor .field span {
+  font-size: 10px;
+}
+.placement-editor select,
+.placement-editor input {
+  min-height: 33px;
+  padding: 6px;
+  font-size: 10px;
+}
+.placement-gap {
+  max-width: 90px;
+}
+.placement-sides {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+}
+.placement-side {
+  flex-direction: column;
+  gap: 4px;
+  min-height: 45px;
+  padding: 6px 2px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 10px;
+}
+.placement-side .icon {
+  width: 16px;
+  height: 16px;
+}
+.placement-editor .field-help {
+  margin: 9px 0 0;
+  font-size: 9px;
+}
+.dimension-list-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 6px;
+}
+.dimension-list-item > input {
+  margin-left: 3px;
+  flex-shrink: 0;
+  accent-color: var(--accent);
+}
+.dimension-list-item.selected {
+  background: var(--accent-soft);
+}
+.dimension-list-item .dimension-row {
+  flex: 1;
+  width: auto;
+  min-width: 0;
+}
+.focused-dimension-editor > summary {
+  padding: 12px 0;
+  font-size: 11px;
+  cursor: pointer;
+  color: var(--accent);
 }
 .dimension-row {
   width: 100%;
@@ -1958,6 +2111,8 @@ h1 {
   #workspace-feedback,
   .workspace-dock,
   .viewport-dock,
+  .grid-dock,
+  [data-workspace-grid],
   .canvas-status,
   .toast {
     display: none !important;
@@ -2049,4 +2204,22 @@ h1 {
 }
 .canvas-area.panning * {
   cursor: grabbing !important;
+}
+
+@container (max-width: 420px) {
+  .canvas-shell {
+    --canvas-bottom: 94px;
+  }
+  .grid-dock {
+    bottom: 52px;
+  }
+}
+@media (pointer: coarse) {
+  .grid-dock .dock-button {
+    width: 40px;
+    height: 40px;
+  }
+  .grid-step input {
+    min-height: 40px;
+  }
 }

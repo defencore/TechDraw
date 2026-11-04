@@ -14,6 +14,8 @@ The Open CASCADE WebAssembly kernel imports STEP geometry and computes precise h
 - Use six visible dimension icons in a compact floating dock: Horizontal, Vertical, Aligned, Diameter, Radius and Angle. Tooltips identify each tool and its shortcut. Preview before placement, drag labels or dimension lines, remove dimensions, and undo or redo changes.
 - Edit a selected dimension in a compact panel with tolerance-mode buttons for None, ±, upper/lower deviations or a manually entered fit designation. Tolerances remain editable in saved projects and appear in PDF exports.
 - Arrange smaller dimensions inside larger spans, with separate lanes for overlapping dimensions.
+- Select dimension groups, move them together, and place compatible dimensions on a chosen side with shared alignment or cascade spacing.
+- Show a paper grid and snap annotation placement to a configurable step; grid preferences are remembered independently of drawing data.
 - Set paper size A4, A3, A2 or A1, orientation, scale, decimal precision, hidden edges and centre lines.
 - Choose GOST 2.104-68 Form 1 templates with English or Ukrainian frame labels, plus ISO-style or minimal sheets. The interface stays in English.
 - Edit title-block data, sign-off names, signatures, dates, change records, inventory fields and technical notes. Entries are saved in this browser and reused for subsequent parts and sessions; **Clear** resets the fields and their cache.
@@ -39,6 +41,9 @@ Automatic dimensions are geometric suggestions. The app does not import semantic
 | Mouse wheel                                            | Zoom around the cursor, from 25% to 1600% of the fitted sheet |
 | Space + drag, middle mouse drag, or hand tool          | Pan the sheet                                                 |
 | Drag empty space with the selection tool               | Pan the sheet                                                 |
+| Shift / Ctrl-click dimensions, or dimension checkboxes | Add or remove dimensions from a selection group               |
+| `G` / `S`                                              | Toggle the paper grid / grid snapping                         |
+| Alt while placing or dragging                          | Temporarily bypass grid snapping                              |
 | `0` or **Fit sheet**                                   | Show the whole sheet and reset panning                        |
 | `+` / `-` or the zoom controls                         | Zoom around the viewport centre                               |
 | `Esc`                                                  | Cancel a draft or gesture and return to selection             |
@@ -47,9 +52,13 @@ Automatic dimensions are geometric suggestions. The app does not import semantic
 
 Zoom changes the on-screen view only. **Drawing scale** controls the printed size. Adding, dragging, deleting or editing a dimension keeps the part views fixed; **Auto dimensions**, **Arrange**, or a change to paper format, orientation, template or drawing scale can lay out the sheet again. Undo restores both the previous dimensions and their view layout.
 
-The drawing dock keeps selection, panning and dimension tools together over the workspace. A separate compact zoom dock contains Fit and zoom controls.
+The drawing dock keeps selection, panning and dimension tools together over the workspace. Separate compact docks contain the grid and zoom controls.
 
 **Refresh automatic suggestions** updates geometric suggestions while retaining manual dimensions and explicit specifications. **Auto layout** repositions the existing views and annotation labels. Auto drawing scale selects a fitting scale from the GOST 2.302-68 part-drawing series, including 1:2.5, 1:4, 2.5:1 and 4:1. The isometric view can use a separate column when that improves the fit. Warnings above the workspace remain available while editing; use their layout or page-setup actions to address space problems and review the result.
+
+For a selected group, choose **Cascade** for separate dimension lines or **Align** for a shared baseline, then choose a side in **Arrange dimensions**. Horizontal dimensions support Top/Bottom, vertical dimensions support Left/Right, and radius/diameter labels support all four sides. Aligned dimensions use geometrically compatible sides; angles stay unchanged. Nested or colliding spans keep separate lines even in Align mode. **Select view** selects the dimensions in the chosen orthographic view. Dragging a selected dimension moves its group in one undoable operation; measurements and source points stay fixed.
+
+Grid spacing uses millimetres on the printed sheet, independently of zoom and drawing scale. Show Grid and Snap to Grid are separate controls; both start off, with a 5 mm default step. Enter a custom step from 0.1 to 100 mm, or use a suggested value such as 1, 5 or 10 mm. Hold Alt to move freely. The visible grid may simplify at low zoom, while snapping retains the requested step. The grid is a workspace aid and is absent from SVG, PDF and printed output.
 
 To specify a dimensional tolerance, select the dimension and use the **Tolerance** mode buttons in its editing panel. With **±**, enter only the numeric magnitude, such as `0.05`; the ± symbol is supplied automatically. For upper/lower deviations, set each sign with its sign controls and enter the values. For a fit, enter a designation such as `H7`. Review the preview and choose **Apply**. Changing the mode or typing a draft does not change the drawing until applied. **Clear** in the tolerance editor removes the applied tolerance. Linear deviations use millimetres; angular deviations use degrees. Fits apply to linear dimensions and are entered explicitly: the app does not infer a fit from STEP geometry or calculate its limit deviations. The measured nominal value stays tied to the geometry. Applied tolerance edits support undo/redo, project saving and PDF export.
 

@@ -1,4 +1,10 @@
 const paths: Record<string, string> = {
+  grid: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M15 3v18M3 9h18M3 15h18"/>',
+  magnet: '<path d="M5 3v9a7 7 0 0 0 14 0V3h-5v9a2 2 0 0 1-4 0V3H5ZM5 7h5m4 0h5"/>',
+  sideLeft: '<path d="M4 3v18M20 7H9m4-4L9 7l4 4M20 17H9m4-4-4 4 4 4"/>',
+  sideRight: '<path d="M20 3v18M4 7h11m-4-4 4 4-4 4M4 17h11m-4-4 4 4-4 4"/>',
+  sideTop: '<path d="M3 4h18M7 20V9m-4 4 4-4 4 4M17 20V9m-4 4 4-4 4 4"/>',
+  sideBottom: '<path d="M3 20h18M7 4v11m-4-4 4 4 4-4M17 4v11m-4-4 4 4 4-4"/>',
   minus: '<path d="M5 12h14"/>',
   hand: '<path d="M8 12V5a2 2 0 0 1 4 0v6-8a2 2 0 0 1 4 0v8-5a2 2 0 0 1 4 0v9c0 4-3 7-7 7h-1c-3 0-4-2-5-4l-3-5a2 2 0 0 1 3-2l3 3"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
