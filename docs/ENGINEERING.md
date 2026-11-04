@@ -6,6 +6,8 @@ A STEP model can define exact boundary geometry and units. A model without suppo
 
 Automatic dimensions are a reviewable starting point. Overall sizes and supported geometric features can be measured from the CAD model. Their placement and selection still require review for the part's function and manufacturing process. A dimension's displayed precision is formatting; it is not a tolerance or a guarantee of equivalent physical accuracy.
 
+Per-dimension tolerance controls support no tolerance, symmetric ± values, upper/lower deviations, and an explicitly entered fit designation. Draft fields start empty; an annotation is committed only with **Apply**, while **Clear** removes it. Linear deviations use millimetres and angular deviations use degrees; fit designations are available only for linear dimensions. These annotations express the engineer's input and do not change the measured nominal geometry. A fit label is not inferred from the STEP model and does not automatically calculate dimensional limits. Confirm its suitability and applicable limits before release. Saved projects, undo/redo and exported PDFs preserve the committed tolerance data.
+
 Avoid dimensioning tessellated display meshes. Curve sampling and viewport scale affect visual rendering, while numeric dimensions should remain tied to analytic geometry or exact model coordinates. Projected lengths and true spatial lengths are different for oblique edges. Use an orthogonal view in which a dimension represents its intended measurement.
 
 ## Curves and modeled threads

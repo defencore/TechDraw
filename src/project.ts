@@ -1,4 +1,5 @@
 import { titleBlockDefaults, titleBlockKeys } from './drawing/title-block-data';
+import { parseDimensionTolerance } from './drawing/tolerances';
 import type {
   Bounds2,
   Dimension,
@@ -248,6 +249,15 @@ function dimension(value: unknown, budget: Budget): Dimension {
   if (d.textOffset !== undefined) output.textOffset = point(d.textOffset, 2, 'label offset');
   if (d.prefix !== undefined) output.prefix = string(d.prefix, 'dimension prefix', 1000);
   if (d.suffix !== undefined) output.suffix = string(d.suffix, 'dimension suffix', 1000);
+  if (d.tolerance !== undefined) {
+    try {
+      output.tolerance = parseDimensionTolerance(d.tolerance);
+    } catch (error) {
+      return invalid(error instanceof Error ? error.message : 'invalid dimension tolerance.');
+    }
+    if (output.kind === 'angle' && output.tolerance.kind === 'fit')
+      return invalid('fit designations are not valid for angular dimensions.');
+  }
   let expected: number;
   const dx = output.b[0] - output.a[0],
     dy = output.b[1] - output.a[1];

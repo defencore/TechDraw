@@ -51,6 +51,10 @@ export interface ImportResult {
   sourceName: string;
 }
 export type DimensionKind = 'horizontal' | 'vertical' | 'aligned' | 'diameter' | 'radius' | 'angle';
+export type DimensionTolerance =
+  | { kind: 'symmetric'; magnitude: string }
+  | { kind: 'deviation'; upper: string; lower: string }
+  | { kind: 'fit'; designation: string };
 export interface Dimension {
   id: string;
   viewId: ViewId;
@@ -64,6 +68,7 @@ export interface Dimension {
   automatic: boolean;
   prefix?: string;
   suffix?: string;
+  tolerance?: DimensionTolerance;
 }
 export type PaperFormat = 'A4' | 'A3' | 'A2' | 'A1';
 export type TemplateId = 'eskd' | 'eskd-uk' | 'iso' | 'minimal';

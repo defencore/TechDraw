@@ -14,6 +14,8 @@ The application is a static TypeScript/Vite project with a small shared data mod
 | `src/cad/engine.ts`                                        | STEP transfer, unit normalization, solid selection, precise HLR projections and analytic edge data |
 | `src/cad/step-metadata.ts`                                 | Product names and assembly relationships; never geometric parsing                                  |
 | `src/drawing/dimensions.ts`                                | Automatic geometric dimension suggestions, coverage warnings and numeric labels                    |
+| `src/drawing/tolerances.ts`                                | Validation of explicit numeric deviations and manually entered fit designations                    |
+| `src/drawing/dimension-label.ts`                           | Shared nominal/tolerance text runs and bounds for rendering, picking and layout                    |
 | `src/drawing/layout.ts`                                    | Initialize arranged dimensions and their persistent physical layout together                       |
 | `src/drawing/render.ts`                                    | Paper dimensions, first-angle layout, templates, SVG linework and annotations                      |
 | `src/drawing/gost-form1.ts`                                | GOST 2.104-68 Form 1 frame geometry and English/Ukrainian sheet labels                             |
@@ -26,6 +28,7 @@ The application is a static TypeScript/Vite project with a small shared data mod
 | `src/ui/geometry-picking.ts`                               | Screen-radius picking of edges, endpoints and centres with model-coordinate references             |
 | `src/ui/dimension-picking.ts`                              | Screen-space picking of annotation labels and lines                                                |
 | `src/ui/dimension-drag.ts`                                 | Pure paper-space annotation dragging and draft positioning                                         |
+| `src/ui/tolerance-editor.ts`                               | Draft tolerance controls, validation preview and explicit Apply/Clear actions                      |
 | `src/ui/title-block-editor.ts`                             | English editor for document data, sign-offs, changes, inventory and technical requirements         |
 | `src/ui/title-block-cache.ts`                              | Whitelisted browser persistence of document fields and selected template                           |
 | `src/ui/views.ts`, `components.ts`, `utils.ts`, `icons.ts` | Workspace views, accessible controls, escaping and icons                                           |
@@ -61,11 +64,20 @@ Display zoom is clamped to 25–1600%. Space + drag, middle mouse drag, the hand
 
 Geometry and dimension picking use screen-pixel tolerances so their hit areas remain usable at different zoom levels. A new dimension follows a pick → draft preview → click-to-place interaction. Existing labels and dimension lines can be dragged. `Esc` cancels the pending operation; undo/redo acts on committed dimension/layout snapshots.
 
+## Dimension tolerances
+
+`Dimension.tolerance` is optional. An absent property means no structured tolerance; the supported variants are symmetric magnitude, upper/lower deviations, and a fit designation. Decimal values are stored as validated strings so entered precision can be preserved. Linear deviations use millimetres; angular deviations use degrees. Fits are manually entered linear-dimension labels, with no inferred fit class or numeric limit lookup.
+
+The tolerance editor holds uncommitted mode and text separately from the drawing. This lets a field contain an incomplete sign or decimal while the user types. Mode changes and typing do not create history entries or export draft values. A valid **Apply** commits one dimension/layout snapshot; **Clear** removes the applied tolerance. Saved projects and PDF output use only committed data. The free-text note after a dimension remains separate from its structured tolerance.
+
+`dimension-label.ts` supplies shared text runs and bounds. Symmetric ± and fit labels are inline; upper/lower deviations are stacked. Rendering, annotation picking and layout use the same label geometry so tolerance text remains selectable and its full extent is considered during placement and overflow checks.
+
 ## Contract invariants
 
 - A `Part` uses millimetres and contains `front`, `top`, `right` and `iso` projections.
 - Projection coordinates use a Cartesian Y-up convention. The renderer handles conversion to SVG Y-down coordinates.
 - Model measurements never depend on viewport zoom or CSS pixels.
+- Tolerance annotations never replace the measured nominal value. Validate committed deviations and fit designations before rendering or saving them; preserve draft text only in the editor.
 - Viewport transforms and paper-space drawing layouts are separate. Manual dimension edits preserve the layout; display navigation never invalidates it.
 - Isometric views are illustrative; dimension tools operate in orthographic views.
 - A source edge's sampled display length must not substitute for an analytic dimension value.

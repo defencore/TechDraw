@@ -12,6 +12,7 @@ The Open CASCADE WebAssembly kernel imports STEP geometry and computes precise h
 - Suggest overall dimensions, visible full-circle diameters, hole-centre coordinates and verified orthogonal features. Coaxial shaft circles provide exact journal diameters and shoulder or groove stations.
 - Choose a balanced automatic dimension set or all recognized baseline coordinates; reposition the result to suit the part.
 - Add horizontal, vertical, aligned, diameter, radius and angle dimensions with a preview before placement; drag labels or dimension lines, remove dimensions, and undo or redo changes.
+- Set a selected dimension's tolerance to None, symmetric ±, upper/lower deviations or a manually entered fit designation. Tolerances remain editable in saved projects and appear in PDF exports.
 - Arrange smaller dimensions inside larger spans, with separate lanes for overlapping dimensions.
 - Set paper size A4, A3, A2 or A1, orientation, scale, decimal precision, hidden edges and centre lines.
 - Choose GOST 2.104-68 Form 1 templates with English or Ukrainian frame labels, plus ISO-style or minimal sheets. The interface stays in English.
@@ -43,6 +44,8 @@ Automatic dimensions are geometric suggestions. The app does not import semantic
 | `Ctrl` / `⌘` + `Z`, with `Shift` to redo      | Undo or redo dimension and layout changes                     |
 
 Zoom changes the on-screen view only. **Drawing scale** controls the printed size. Adding, dragging, deleting or editing a dimension keeps the part views fixed; **Auto dimensions**, **Arrange**, or a change to paper format, orientation, template or drawing scale can lay out the sheet again. Undo restores both the previous dimensions and their view layout.
+
+To specify a dimensional tolerance, select the dimension and choose its **Tolerance** mode. Enter a symmetric ± value, separate upper/lower deviations, or a fit designation such as `H7`, then review the preview and choose **Apply**. Changing the mode or typing a draft does not change the drawing until applied. **Clear** in the tolerance editor removes the applied tolerance. Linear deviations use millimetres; angular deviations use degrees. Fits apply to linear dimensions and are entered explicitly: the app does not infer a fit from STEP geometry or calculate its limit deviations. The measured nominal value stays tied to the geometry. Applied tolerance edits support undo/redo, project saving and PDF export.
 
 The title-block cache contains document fields and the selected template. **Save project** retains part geometry, dimensions and drawing layouts; keep the original STEP files separately. Browser storage must be available for automatic reuse across reloads.
 

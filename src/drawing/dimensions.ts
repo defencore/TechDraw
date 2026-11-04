@@ -1,4 +1,5 @@
 import type { Dimension, Part, Point2, Point3, ProjectedEdge, Projection } from '../model';
+import { dimensionLeaderMetrics, formatDimensionLabel } from './dimension-label';
 
 const near = (a: number, b: number) => Math.abs(a - b) < 1e-5;
 const unique = (values: number[]) =>
@@ -37,6 +38,7 @@ export function arrangeDimensions(
     side: number;
     normal?: Point2;
     normalSign: number;
+    labelHeight: number;
   }
   const groups = new Map<string, Span[]>();
   for (const d of result) {
@@ -57,7 +59,9 @@ export function arrangeDimensions(
     const min = Math.min(a, b),
       max = Math.max(a, b),
       midpoint = (min + max) / 2;
-    const halfLabel = formatDimension(d, precision).length * 0.95 + 2;
+    const label = formatDimensionLabel(d, precision);
+    const short = d.kind !== 'aligned' && max - min < label.width + 5;
+    const labelCenter = short ? max + 5 + label.width / 2 : midpoint;
     const normalSign =
       d.kind === 'aligned' && (d.b[0] - d.a[0]) * axis[0] + (d.b[1] - d.a[1]) * axis[1] < 0
         ? -1
@@ -69,11 +73,12 @@ export function arrangeDimensions(
       min,
       max,
       length: max - min,
-      labelMin: Math.min(min, midpoint - halfLabel),
-      labelMax: Math.max(max, midpoint + halfLabel),
+      labelMin: Math.min(min - (short ? 4 : 0), labelCenter + label.bounds.minX),
+      labelMax: Math.max(max + (short ? 4 : 0), labelCenter + label.bounds.maxX),
       lane: -1,
       side,
       normalSign,
+      labelHeight: label.height,
       ...(d.kind === 'aligned' ? { normal: [axis[1], axis[0]] as Point2 } : {}),
     };
     if (!groups.has(key)) groups.set(key, []);
@@ -82,6 +87,7 @@ export function arrangeDimensions(
   const overlaps = (a: Span, b: Span) =>
     a.labelMin <= b.labelMax + 2 && b.labelMin <= a.labelMax + 2;
   for (const spans of groups.values()) {
+    const lanePitch = Math.max(6, ...spans.map((span) => span.labelHeight + 1.5));
     const projection = options.part?.views.find((view) => view.id === spans[0].dimension.viewId);
     const referencePoints: Point2[] = projection
       ? [
@@ -100,7 +106,7 @@ export function arrangeDimensions(
       span.lane = placed
         .filter((other) => overlaps(span, other))
         .reduce((lane, other) => Math.max(lane, other.lane + 1), 0);
-      const distance = 9 + span.lane * 6,
+      const distance = 9 + span.lane * lanePitch,
         d = span.dimension;
       if (d.kind === 'horizontal') {
         const target =
@@ -140,21 +146,23 @@ export function arrangeDimensions(
           radius = Math.hypot(d.b[0] - d.a[0], d.b[1] - d.a[1]) * scale;
         const rimX = d.kind === 'radius' ? d.b[0] * scale : d.a[0] * scale + side * radius * 0.7071;
         const rimY = d.kind === 'radius' ? -d.b[1] * scale : -d.a[1] * scale - radius * 0.7071;
-        const x = rimX + side * (Math.abs(d.offset) + 6);
-        const y = rimY - Math.abs(d.offset) * 0.6 - 1.4;
-        return { d, x, y, half: formatDimension(d, precision).length * 0.95 + 2 };
+        const metrics = dimensionLeaderMetrics(d, precision);
+        const label = formatDimensionLabel(d, precision);
+        const x = rimX + side * (Math.abs(d.offset) + metrics.halfLength);
+        const y = rimY - Math.abs(d.offset) * 0.6 + metrics.baselineOffset;
+        return { d, x, y, bounds: label.bounds };
       })
-      .sort((a, b) => b.y - a.y || a.x - b.x);
+      .sort((a, b) => b.y + b.bounds.maxY - a.y - a.bounds.maxY || a.x - b.x);
     const placed: typeof boxes = [];
     for (const box of boxes) {
       const initial = box.y;
       for (const prior of placed)
         if (
-          box.x - box.half <= prior.x + prior.half + 2 &&
-          box.x + box.half >= prior.x - prior.half - 2 &&
-          box.y > prior.y - 6
+          box.x + box.bounds.minX <= prior.x + prior.bounds.maxX + 2 &&
+          box.x + box.bounds.maxX >= prior.x + prior.bounds.minX - 2 &&
+          box.y + box.bounds.maxY > prior.y + prior.bounds.minY - 1.5
         )
-          box.y = prior.y - 6;
+          box.y = prior.y + prior.bounds.minY - 1.5 - box.bounds.maxY;
       if (box.y !== initial) box.d.textOffset = [0, box.y - initial];
       placed.push(box);
     }
@@ -243,9 +251,7 @@ function viewPoint(point: Point3, id: Projection['id']): Point2 {
       ? [point[0], -point[1]]
       : [-point[1], point[2]];
 }
-function shaftFeatures(
-  part: Part,
-):
+function shaftFeatures(part: Part):
   | {
       axis: number;
       circles: SourceCircle[];
@@ -478,7 +484,5 @@ export function autoDimensions(part: Part, detail: 'balanced' | 'full' = 'balanc
 }
 
 export function formatDimension(dimension: Dimension, precision: number): string {
-  const value = Number(dimension.value.toFixed(Math.max(0, Math.min(6, precision)))).toString();
-  const symbol = dimension.kind === 'diameter' ? 'Ø' : dimension.kind === 'radius' ? 'R' : '';
-  return `${dimension.prefix ?? ''}${symbol}${value}${dimension.kind === 'angle' ? '°' : ''}${dimension.suffix ?? ''}`;
+  return formatDimensionLabel(dimension, precision).plainText;
 }

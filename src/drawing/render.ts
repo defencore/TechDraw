@@ -7,7 +7,14 @@ import type {
   Projection,
   ViewId,
 } from '../model';
-import { autoDimensionWarnings, formatDimension } from './dimensions';
+import { autoDimensionWarnings } from './dimensions';
+import {
+  DIMENSION_LABEL_GAP,
+  dimensionLabelBoundsAt,
+  dimensionLeaderMetrics,
+  formatDimensionLabel,
+  type DimensionLabel,
+} from './dimension-label';
 import { isGostTemplate, renderGostForm1 } from './gost-form1';
 
 export interface ViewTransform {
@@ -57,6 +64,29 @@ const sheetPoint = (p: Point2, t: ViewTransform): Point2 => [
 ];
 const scaleLabel = (scale: number): string => (scale >= 1 ? `${n(scale)}:1` : `1:${n(1 / scale)}`);
 
+function angularLabelOrigin(
+  vertex: Point2,
+  start: number,
+  delta: number,
+  radius: number,
+  label: DimensionLabel,
+): Point2 {
+  const mid = start + delta / 2,
+    ux = Math.cos(mid),
+    uy = Math.sin(mid);
+  const bounds = label.bounds;
+  const nearest = Math.min(
+    ...[
+      [bounds.minX, bounds.minY],
+      [bounds.maxX, bounds.minY],
+      [bounds.maxX, bounds.maxY],
+      [bounds.minX, bounds.maxY],
+    ].map(([x, y]) => x * ux + y * uy),
+  );
+  const distance = radius + DIMENSION_LABEL_GAP - nearest;
+  return [vertex[0] + ux * distance, vertex[1] + uy * distance];
+}
+
 export function paperSize(
   settings: Pick<DrawingSettings, 'format' | 'orientation'>,
 ): [number, number] {
@@ -74,8 +104,9 @@ export function renderDimension(
   const a = sheetPoint(d.a, t),
     b = sheetPoint(d.b, t);
   const color = selected ? '#16745e' : '#20262b';
-  const label = escapeXml(formatDimension(d, precision));
-  const labelHalf = textWidth(formatDimension(d, precision), 3.2) / 2 + 0.5;
+  const label = formatDimensionLabel(d, precision);
+  const labelHalf = label.width / 2;
+  const baselineOffset = -DIMENSION_LABEL_GAP - label.bounds.maxY;
   const tx = d.textOffset?.[0] ?? 0,
     ty = d.textOffset?.[1] ?? 0;
   let content = '';
@@ -97,7 +128,13 @@ export function renderDimension(
   const labelAt = (p: Point2, angle = 0, includeOffset = true) => {
     const x = p[0] + (includeOffset ? tx : 0),
       y = p[1] + (includeOffset ? ty : 0);
-    return `<g class="dimension-label" data-dimension-grip="label"${angle ? ` transform="rotate(${angle} ${n(x)} ${n(y)})"` : ''}><rect x="${n(x - labelHalf)}" y="${n(y - 3.5)}" width="${n(labelHalf * 2)}" height="4.5" fill="white" stroke="none"/><text x="${n(x)}" y="${n(y)}" fill="${color}" stroke="none" text-anchor="middle" font-size="3.2">${label}</text></g>`;
+    const runs = label.runs
+      .map(
+        (run) =>
+          `<text x="${n(x + run.x)}" y="${n(y + run.y)}" fill="${color}" stroke="none" text-anchor="${run.anchor}" font-size="${run.fontSize}" data-dimension-label-run="${run.role}">${escapeXml(run.text)}</text>`,
+      )
+      .join('');
+    return `<g class="dimension-label" data-dimension-grip="label" aria-label="${escapeXml(label.plainText)}"${angle ? ` transform="rotate(${angle} ${n(x)} ${n(y)})"` : ''}><rect x="${n(x + label.bounds.minX)}" y="${n(y + label.bounds.minY)}" width="${n(label.width)}" height="${n(label.height)}" fill="white" stroke="none"/>${runs}</g>`;
   };
   if (d.kind === 'horizontal') {
     const y = Math.max(a[1], b[1]) + d.offset;
@@ -114,7 +151,7 @@ export function renderDimension(
           gripLine([right + 4, y], [right, y]) +
           arrow([right, y], [1, 0])
         : dimensionLine([a[0], y], [b[0], y])) +
-      labelAt([short ? right + 5 + labelHalf : (a[0] + b[0]) / 2, y - 1.2]);
+      labelAt([short ? right + 5 + labelHalf : (a[0] + b[0]) / 2, y + baselineOffset]);
   } else if (d.kind === 'vertical') {
     const x = Math.min(a[0], b[0]) - d.offset;
     const top = Math.min(a[1], b[1]),
@@ -130,7 +167,7 @@ export function renderDimension(
           gripLine([x, bottom + 4], [x, bottom]) +
           arrow([x, bottom], [0, 1])
         : dimensionLine([x, a[1]], [x, b[1]])) +
-      labelAt([x - 1.2, short ? top - 5 - labelHalf : (a[1] + b[1]) / 2], -90);
+      labelAt([x + baselineOffset, short ? top - 5 - labelHalf : (a[1] + b[1]) / 2], -90);
   } else if (d.kind === 'aligned') {
     const dx = b[0] - a[0],
       dy = b[1] - a[1],
@@ -139,13 +176,18 @@ export function renderDimension(
     const p: Point2 = [a[0] + normal[0] * d.offset, a[1] + normal[1] * d.offset];
     const q: Point2 = [b[0] + normal[0] * d.offset, b[1] + normal[1] * d.offset];
     const angle = (Math.atan2(dy, dx) * 180) / Math.PI;
+    const labelAngle = angle > 90 || angle < -90 ? angle + 180 : angle;
+    const radians = (labelAngle * Math.PI) / 180;
     content =
       extensionLine(a, p) +
       extensionLine(b, q) +
       dimensionLine(p, q) +
       labelAt(
-        [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2 - 1.3],
-        angle > 90 || angle < -90 ? angle + 180 : angle,
+        [
+          (p[0] + q[0]) / 2 - Math.sin(radians) * baselineOffset,
+          (p[1] + q[1]) / 2 + Math.cos(radians) * baselineOffset,
+        ],
+        labelAngle,
       );
   } else if (d.kind === 'diameter' || d.kind === 'radius') {
     const radius = Math.hypot(b[0] - a[0], b[1] - a[1]);
@@ -153,12 +195,13 @@ export function renderDimension(
     const point: Point2 =
       d.kind === 'radius' ? b : [a[0] + side * radius * 0.7071, a[1] - radius * 0.7071];
     const elbow: Point2 = [point[0] + d.offset + tx, point[1] - Math.abs(d.offset) * 0.6 + ty];
-    const end: Point2 = [elbow[0] + side * 12, elbow[1]];
+    const metrics = dimensionLeaderMetrics(d, precision);
+    const end: Point2 = [elbow[0] + side * metrics.halfLength * 2, elbow[1]];
     content =
       gripLine(point, elbow) +
       arrow(point, [elbow[0] - point[0], elbow[1] - point[1]]) +
       gripLine(elbow, end) +
-      labelAt([(elbow[0] + end[0]) / 2, elbow[1] - 1.4], 0, false);
+      labelAt([(elbow[0] + end[0]) / 2, elbow[1] + metrics.baselineOffset], 0, false);
   } else if (d.kind === 'angle') {
     const vertex = sheetPoint(d.vertex ?? d.a, t);
     const start = Math.atan2(a[1] - vertex[1], a[0] - vertex[0]);
@@ -171,7 +214,6 @@ export function renderDimension(
       vertex[0] + Math.cos(start + delta) * radius,
       vertex[1] + Math.sin(start + delta) * radius,
     ];
-    const mid = start + delta / 2;
     content =
       line(vertex, p) +
       line(vertex, q) +
@@ -181,7 +223,7 @@ export function renderDimension(
         Math.sin(start + delta) * Math.sign(delta),
         -Math.cos(start + delta) * Math.sign(delta),
       ]) +
-      labelAt([vertex[0] + Math.cos(mid) * (radius + 3), vertex[1] + Math.sin(mid) * (radius + 3)]);
+      labelAt(angularLabelOrigin(vertex, start, delta, radius, label));
   }
   return `<g class="dimension${selected ? ' selected' : ''}" data-dimension-id="${escapeXml(d.id)}" data-view-id="${d.viewId}" fill="none" stroke="${color}" stroke-width="${selected ? 0.4 : 0.18}" style="cursor:move">${content}</g>`;
 }
@@ -316,12 +358,15 @@ function occupiedBounds(
   for (const d of dimensions.filter((item) => item.viewId === view.id)) {
     const a: Point2 = [d.a[0] * scale, -d.a[1] * scale],
       b: Point2 = [d.b[0] * scale, -d.b[1] * scale];
-    const labelHalf = textWidth(formatDimension(d, precision), 3.2) / 2 + 0.5;
+    const labelData = formatDimensionLabel(d, precision);
+    const labelHalf = labelData.width / 2;
+    const baselineOffset = -DIMENSION_LABEL_GAP - labelData.bounds.maxY;
     const tx = d.textOffset?.[0] ?? 0,
       ty = d.textOffset?.[1] ?? 0;
-    const label = (x: number, y: number, rotated = false) => {
-      add(x + tx - (rotated ? 4 : labelHalf), y + ty - (rotated ? labelHalf : 3.8));
-      add(x + tx + (rotated ? 1 : labelHalf), y + ty + (rotated ? labelHalf : 1));
+    const label = (x: number, y: number, angle = 0) => {
+      const occupied = dimensionLabelBoundsAt(labelData, [x + tx, y + ty], angle);
+      add(occupied.minX, occupied.minY);
+      add(occupied.maxX, occupied.maxY);
     };
     if (d.kind === 'horizontal') {
       const y = Math.max(a[1], b[1]) + d.offset;
@@ -334,7 +379,7 @@ function occupiedBounds(
         add(left - 4, y);
         add(right + 4, y);
       }
-      label(short ? right + 5 + labelHalf : (a[0] + b[0]) / 2, y - 1.2);
+      label(short ? right + 5 + labelHalf : (a[0] + b[0]) / 2, y + baselineOffset);
     } else if (d.kind === 'vertical') {
       const x = Math.min(a[0], b[0]) - d.offset;
       const top = Math.min(a[1], b[1]),
@@ -346,15 +391,16 @@ function occupiedBounds(
         add(x, top - 4);
         add(x, bottom + 4);
       }
-      label(x - 1.2, short ? top - 5 - labelHalf : (a[1] + b[1]) / 2, true);
+      label(x + baselineOffset, short ? top - 5 - labelHalf : (a[1] + b[1]) / 2, -90);
     } else if (d.kind === 'diameter' || d.kind === 'radius') {
       const r = Math.hypot(b[0] - a[0], b[1] - a[1]);
       const side = d.offset < 0 ? -1 : 1;
       const x = (d.kind === 'radius' ? b[0] : a[0] + side * r * 0.7071) + d.offset,
         y = (d.kind === 'radius' ? b[1] : a[1] - r * 0.7071) - Math.abs(d.offset) * 0.6;
+      const metrics = dimensionLeaderMetrics(d, precision);
       add(x + tx, y + ty);
-      add(x + side * 12 + tx, y + ty);
-      label(x + side * 6, y - 1.4);
+      add(x + side * metrics.halfLength * 2 + tx, y + ty);
+      label(x + side * metrics.halfLength, y + metrics.baselineOffset);
     } else if (d.kind === 'aligned') {
       const dx = b[0] - a[0],
         dy = b[1] - a[1],
@@ -363,16 +409,26 @@ function occupiedBounds(
         ny = (dx / length) * d.offset;
       includeExtension(a, [a[0] + nx, a[1] + ny]);
       includeExtension(b, [b[0] + nx, b[1] + ny]);
-      const x = (a[0] + b[0]) / 2 + nx + tx,
-        y = (a[1] + b[1]) / 2 + ny - 1.3 + ty;
-      const radius = Math.hypot(labelHalf, 4);
-      add(x - radius, y - radius);
-      add(x + radius, y + radius);
+      const angle = (Math.atan2(dy, dx) * 180) / Math.PI;
+      const labelAngle = angle > 90 || angle < -90 ? angle + 180 : angle;
+      const radians = (labelAngle * Math.PI) / 180;
+      label(
+        (a[0] + b[0]) / 2 + nx - Math.sin(radians) * baselineOffset,
+        (a[1] + b[1]) / 2 + ny + Math.cos(radians) * baselineOffset,
+        labelAngle,
+      );
     } else {
       const v = d.vertex ?? d.a,
-        r = Math.abs(d.offset) + labelHalf + 7;
-      add(v[0] * scale - r + tx, -v[1] * scale - r + ty);
-      add(v[0] * scale + r + tx, -v[1] * scale + r + ty);
+        vertex: Point2 = [v[0] * scale, -v[1] * scale];
+      const radius = Math.max(6, Math.abs(d.offset));
+      const start = Math.atan2(a[1] - vertex[1], a[0] - vertex[0]);
+      let delta = Math.atan2(b[1] - vertex[1], b[0] - vertex[0]) - start;
+      while (delta > Math.PI) delta -= Math.PI * 2;
+      while (delta < -Math.PI) delta += Math.PI * 2;
+      add(vertex[0] - radius - 3, vertex[1] - radius - 3);
+      add(vertex[0] + radius + 3, vertex[1] + radius + 3);
+      const origin = angularLabelOrigin(vertex, start, delta, radius, labelData);
+      label(origin[0], origin[1]);
     }
   }
   return bounds;

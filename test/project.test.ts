@@ -316,3 +316,80 @@ test('angle values must agree with a finite pair of rays and an explicit vertex'
   delete project.dimensions['part-1'][0].vertex;
   assert.throws(() => parseProject(JSON.stringify(project)), /require a vertex/);
 });
+
+test('dimension tolerance modes survive project roundtrip without changing nominal measurements', () => {
+  const tolerances = [
+    { kind: 'symmetric' as const, magnitude: '0.050' },
+    { kind: 'deviation' as const, upper: '+0.040', lower: '-0.020' },
+    { kind: 'deviation' as const, upper: '-0.010', lower: '-0.030' },
+    { kind: 'fit' as const, designation: 'H7/g6' },
+  ];
+  for (const tolerance of tolerances) {
+    const state = workspace(),
+      original = structuredClone(state.dimensions['part-1'][0]);
+    state.dimensions['part-1'][0].tolerance = tolerance;
+    const reopened = parseProject(serializeProject(state)).dimensions['part-1'][0];
+    assert.deepEqual(reopened.tolerance, tolerance);
+    const { tolerance: omitted, ...nominal } = reopened;
+    assert.deepEqual(nominal, original);
+  }
+  const legacy = source();
+  legacy.dimensions['part-1'][0].suffix = ' ±0.05';
+  assert.equal(parseProject(JSON.stringify(legacy)).dimensions['part-1'][0].tolerance, undefined);
+  assert.equal(parseProject(JSON.stringify(legacy)).dimensions['part-1'][0].suffix, ' ±0.05');
+});
+
+test('project tolerance parsing rejects malformed values and keeps only supported data', () => {
+  const invalid = [
+    null,
+    [],
+    '0.05',
+    { kind: 'unknown' },
+    { kind: 'symmetric', magnitude: '-0.050' },
+    { kind: 'symmetric', magnitude: '0,05' },
+    { kind: 'symmetric', magnitude: '1e-3' },
+    { kind: 'symmetric', magnitude: '1000001' },
+    { kind: 'symmetric', magnitude: '0.0000000001' },
+    { kind: 'deviation', upper: '-0.1', lower: '0.1' },
+    { kind: 'deviation', upper: '0.1', lower: '' },
+    { kind: 'fit', designation: 'H7<script>' },
+  ];
+  for (const tolerance of invalid) {
+    const project = source();
+    project.dimensions['part-1'][0].tolerance = tolerance;
+    assert.throws(() => parseProject(JSON.stringify(project)), /Invalid project/);
+  }
+  const project = source();
+  project.dimensions['part-1'][0].tolerance = {
+    kind: 'fit',
+    designation: 'H7',
+    onclick: 'untrusted',
+    numericLimits: [0, 1],
+  };
+  const parsed = parseProject(JSON.stringify(project)).dimensions['part-1'][0].tolerance;
+  assert.deepEqual(parsed, { kind: 'fit', designation: 'H7' });
+});
+
+test('angular dimensions accept numeric deviations in degrees and reject fit designations', () => {
+  const project = source();
+  project.dimensions['part-1'] = [
+    {
+      id: 'angle',
+      viewId: 'front',
+      kind: 'angle',
+      a: [10, 0],
+      b: [0, 10],
+      vertex: [0, 0],
+      value: 90,
+      offset: 14,
+      automatic: false,
+      tolerance: { kind: 'symmetric', magnitude: '0.50' },
+    },
+  ];
+  assert.deepEqual(parseProject(JSON.stringify(project)).dimensions['part-1'][0].tolerance, {
+    kind: 'symmetric',
+    magnitude: '0.50',
+  });
+  project.dimensions['part-1'][0].tolerance = { kind: 'fit', designation: 'H7' };
+  assert.throws(() => parseProject(JSON.stringify(project)), /not valid for angular/);
+});

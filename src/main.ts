@@ -1,6 +1,8 @@
 import './style.css';
 import { createCadClient } from './cad/client';
-import { autoDimensions } from './drawing/dimensions';
+import { autoDimensions, formatDimension } from './drawing/dimensions';
+import { normalizeToleranceNumber, parseDimensionTolerance } from './drawing/tolerances';
+import { renderToleranceFields, type ToleranceMode } from './ui/tolerance-editor';
 import { initializeDrawing } from './drawing/layout';
 import { titleBlockDefaults, cleanTitleBlockText } from './drawing/title-block-data';
 import {
@@ -11,7 +13,7 @@ import {
 import { renderDrawing } from './drawing/render';
 import { DrawingCanvas, type CanvasTool } from './ui/drawing-canvas';
 import { parseProject, serializeProject } from './project';
-import type { Dimension, Part, DrawingSettings } from './model';
+import type { Dimension, DimensionTolerance, Part, DrawingSettings } from './model';
 import { defaultSettings, DimensionHistory, type WorkspaceState } from './state';
 import { icon } from './ui/icons';
 import { button, option } from './ui/components';
@@ -334,6 +336,67 @@ function updateDimensionControl(control: HTMLInputElement): void {
   if (undo) undo.disabled = false;
   if (redo) redo.disabled = true;
 }
+
+function toleranceFromControls(): DimensionTolerance | undefined {
+  const dimension = dims().find((d) => d.id === selectedDimension);
+  if (!dimension) throw new Error('Select a dimension first.');
+  const mode = app.querySelector<HTMLSelectElement>('#tolerance-kind')?.value as ToleranceMode;
+  const raw = (key: string) =>
+    app.querySelector<HTMLInputElement>(`[data-tolerance-field="${key}"]`)?.value ?? '';
+  const decimal = (key: string) => {
+    const value = normalizeToleranceNumber(raw(key));
+    if (value === undefined)
+      throw new Error('Enter decimal deviations, for example 0.05 or -0.02.');
+    return value;
+  };
+  if (mode === 'none') return undefined;
+  if (mode === 'fit') {
+    if (dimension.kind === 'angle') throw new Error('Fit designations apply to linear dimensions.');
+    return parseDimensionTolerance({ kind: mode, designation: raw('designation').trim() });
+  }
+  return parseDimensionTolerance(
+    mode === 'symmetric'
+      ? { kind: mode, magnitude: decimal('magnitude') }
+      : { kind: mode, upper: decimal('upper'), lower: decimal('lower') },
+  );
+}
+function updateTolerancePreview(): void {
+  const preview = app.querySelector('#tolerance-preview');
+  if (!preview) return;
+  const error = app.querySelector<HTMLElement>('#tolerance-error');
+  if (error) error.hidden = true;
+  const dimension = dims().find((d) => d.id === selectedDimension);
+  try {
+    const tolerance = toleranceFromControls();
+    preview.textContent = dimension
+      ? `Preview: ${formatDimension({ ...dimension, tolerance }, state.settings.precision)}`
+      : '';
+  } catch {
+    preview.textContent = 'Enter the tolerance values, then choose Apply tolerance.';
+  }
+}
+function applyTolerance(remove = false): void {
+  const dimension = dims().find((d) => d.id === selectedDimension);
+  if (!dimension) return;
+  try {
+    const tolerance = remove ? undefined : toleranceFromControls();
+    if (JSON.stringify(tolerance) === JSON.stringify(dimension.tolerance)) return;
+    const next = structuredClone(dims());
+    const edited = next.find((d) => d.id === dimension.id)!;
+    if (tolerance) edited.tolerance = tolerance;
+    else delete edited.tolerance;
+    changeDimensions(next);
+    toast(
+      tolerance ? 'Tolerance applied. The measured dimension is unchanged.' : 'Tolerance cleared.',
+    );
+  } catch (error) {
+    const message = app.querySelector<HTMLElement>('#tolerance-error');
+    if (message) {
+      message.textContent = errorMessage(error);
+      message.hidden = false;
+    }
+  }
+}
 app.addEventListener('focusout', (event) => {
   const control = event.target as HTMLInputElement;
   if (
@@ -350,6 +413,10 @@ app.addEventListener('focusout', (event) => {
 });
 app.addEventListener('input', (event) => {
   const control = event.target as HTMLInputElement | HTMLTextAreaElement;
+  if (control.dataset.toleranceField) {
+    updateTolerancePreview();
+    return;
+  }
   if (control instanceof HTMLInputElement && control.dataset.dimensionSetting) {
     updateDimensionControl(control);
     return;
@@ -594,6 +661,8 @@ app.addEventListener('click', (event) => {
     } else if (action === 'fit') {
       drawingCanvas.fit();
     } else if (action === 'zoom-in') drawingCanvas.zoomBy(1.25);
+    else if (action === 'apply-tolerance') applyTolerance();
+    else if (action === 'remove-tolerance') applyTolerance(true);
     else if (action === 'zoom-out') drawingCanvas.zoomBy(1 / 1.25);
     else if (action === 'auto-dimensions' && active()) {
       selectedDimension = undefined;
@@ -671,6 +740,16 @@ app.addEventListener('click', (event) => {
 
 app.addEventListener('change', (event) => {
   const target = event.target as HTMLInputElement;
+  if (target.id === 'tolerance-kind') {
+    const dimension = dims().find((d) => d.id === selectedDimension);
+    const fields = app.querySelector('#tolerance-fields');
+    if (dimension && fields)
+      fields.innerHTML = renderToleranceFields(target.value as ToleranceMode, dimension);
+    const apply = app.querySelector<HTMLButtonElement>('[data-action="apply-tolerance"]');
+    if (apply) apply.disabled = target.value === 'none' && !dimension?.tolerance;
+    updateTolerancePreview();
+    return;
+  }
   if (target.id === 'file-input') {
     void importFiles(Array.from(target.files ?? []));
     target.value = '';
@@ -757,6 +836,11 @@ window.addEventListener('drop', (event) => {
   if (event.dataTransfer) void importFiles([...event.dataTransfer.files]);
 });
 window.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter' && (event.target as HTMLElement)?.dataset.toleranceField) {
+    event.preventDefault();
+    applyTolerance();
+    return;
+  }
   if (helpOpen && event.key === 'Tab') {
     const controls = [
       ...document.querySelectorAll<HTMLElement>('.help-dialog button,.help-dialog a'),

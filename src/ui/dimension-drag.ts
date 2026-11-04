@@ -1,5 +1,6 @@
 import type { Dimension, Point2 } from '../model';
 import type { ViewTransform } from '../drawing/render';
+import { dimensionLeaderMetrics } from '../drawing/dimension-label';
 
 function checkedPoint(point: Point2, label: string): void {
   if (point.length !== 2 || !point.every(Number.isFinite)) {
@@ -77,6 +78,7 @@ export function positionDimension(
   dimension: Dimension,
   sheetPoint: Point2,
   viewTransform: ViewTransform,
+  precision = 2,
 ): Dimension {
   checkedPoint(sheetPoint, 'Dimension position');
   checkedTransform(viewTransform);
@@ -107,7 +109,8 @@ export function positionDimension(
     const rim: Point2 =
       dimension.kind === 'radius' ? b : [a[0] + side * radius * 0.7071, a[1] - radius * 0.7071];
     next.offset = side * 10;
-    const label: Point2 = [rim[0] + side * 16, rim[1] - 7.4];
+    const { halfLength, baselineOffset } = dimensionLeaderMetrics(dimension, precision);
+    const label: Point2 = [rim[0] + side * (10 + halfLength), rim[1] - 6 + baselineOffset];
     next.textOffset = [sheetPoint[0] - label[0], sheetPoint[1] - label[1]];
   }
   return next;

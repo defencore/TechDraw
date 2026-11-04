@@ -364,6 +364,7 @@ export class DrawingCanvas {
         this.draft,
         this.sheetPoint(event),
         this.sheet.viewTransforms[this.draft.viewId],
+        this.document.settings.precision,
       );
       this.scheduleFeedback();
       return;
@@ -454,6 +455,7 @@ export class DrawingCanvas {
         this.draft,
         this.sheetPoint(event),
         this.sheet.viewTransforms[this.draft.viewId],
+        this.document.settings.precision,
       );
       if (!this.dimensionFits(dimension)) {
         this.callbacks.error(
@@ -539,6 +541,7 @@ export class DrawingCanvas {
           dimension,
           this.sheetPoint(event),
           this.sheet.viewTransforms[dimension.viewId],
+          this.document.settings.precision,
         );
         this.hovered = undefined;
       }
