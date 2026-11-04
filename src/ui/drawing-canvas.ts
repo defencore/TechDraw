@@ -32,6 +32,7 @@ import {
   getViewportTransform,
   panViewport,
   resizeViewport,
+  viewportSafeArea,
   toSheet,
   zoomAt,
   type ViewportMetrics,
@@ -238,17 +239,18 @@ export class DrawingCanvas {
       maxY: Math.max(...geometries.map(({ bounds }) => bounds.maxY)),
     };
     const baseScale = getViewportTransform(fitViewport(), this.metrics).scale;
+    const area = viewportSafeArea(this.metrics);
     const pixelsPerMillimetre = Math.min(
-      Math.max(1, this.metrics.width - 80) / Math.max(1, bounds.maxX - bounds.minX),
-      Math.max(1, this.metrics.height - 80) / Math.max(1, bounds.maxY - bounds.minY),
+      Math.max(1, area.width - 80) / Math.max(1, bounds.maxX - bounds.minX),
+      Math.max(1, area.height - 80) / Math.max(1, bounds.maxY - bounds.minY),
     );
     const zoom = clampViewportZoom(pixelsPerMillimetre / baseScale);
     const centered = getViewportTransform({ zoom, pan: [0, 0] }, this.metrics);
     this.viewport = {
       zoom,
       pan: [
-        this.metrics.width / 2 - centered.x - ((bounds.minX + bounds.maxX) / 2) * centered.scale,
-        this.metrics.height / 2 - centered.y - ((bounds.minY + bounds.maxY) / 2) * centered.scale,
+        area.x + area.width / 2 - centered.x - ((bounds.minX + bounds.maxX) / 2) * centered.scale,
+        area.y + area.height / 2 - centered.y - ((bounds.minY + bounds.maxY) / 2) * centered.scale,
       ],
     };
     this.applyViewport(false);
@@ -260,10 +262,11 @@ export class DrawingCanvas {
   }
   setZoom(value: number, anchor?: Point2): void {
     if (!this.metrics || this.gesture?.dimension || this.gesture?.marquee || this.pinch) return;
+    const area = viewportSafeArea(this.metrics);
     this.viewport = zoomAt(
       this.viewport,
       this.metrics,
-      anchor ?? [this.metrics.width / 2, this.metrics.height / 2],
+      anchor ?? [area.x + area.width / 2, area.y + area.height / 2],
       value,
     );
     this.applyViewport(false);
@@ -296,17 +299,27 @@ export class DrawingCanvas {
 
   private applyViewport(resizing = true): void {
     if (!this.element || !this.sheet) return;
+    const parent = this.element.parentElement;
+    const style = parent ? getComputedStyle(parent) : undefined;
+    const inset = (property: string): number => {
+      const value = parseFloat(style?.getPropertyValue(property) ?? '0');
+      return Number.isFinite(value) && value > 0 ? value : 0;
+    };
     const metrics: ViewportMetrics = {
       width: this.element.clientWidth,
       height: this.element.clientHeight,
       paperWidth: this.sheet.width,
       paperHeight: this.sheet.height,
       padding: 24,
+      insets: { top: inset('--canvas-top'), right: 0, bottom: inset('--canvas-bottom'), left: 0 },
     };
     const resized = Boolean(
       resizing &&
       this.metrics &&
-      (this.metrics.width !== metrics.width || this.metrics.height !== metrics.height),
+      (this.metrics.width !== metrics.width ||
+        this.metrics.height !== metrics.height ||
+        this.metrics.insets?.top !== metrics.insets?.top ||
+        this.metrics.insets?.bottom !== metrics.insets?.bottom),
     );
     if (resized && this.metrics) {
       if (this.gesture?.dimension || this.gesture?.marquee || this.pinch) this.cancel();

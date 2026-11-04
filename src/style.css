@@ -605,16 +605,7 @@ h1 {
   min-height: 260px;
   min-width: 0;
   position: relative;
-  border-top: 1px solid var(--border);
-  background-color: var(--canvas);
-}
-.canvas-shell::before {
-  content: '';
-  position: absolute;
-  inset: 10px;
-  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  border-radius: 15px;
-  pointer-events: none;
+  background: transparent;
 }
 .workspace-dock,
 .viewport-dock,
@@ -877,7 +868,7 @@ h1 {
 }
 .canvas-area {
   position: absolute;
-  inset: var(--canvas-top) 0 var(--canvas-bottom);
+  inset: 0;
   min-height: 0;
   overflow: hidden;
   padding: 0;
@@ -2120,9 +2111,6 @@ h1 {
     position: static;
     min-height: 0;
     inset: auto;
-  }
-  .canvas-shell::before {
-    display: none;
   }
   .paper-host {
     position: static;

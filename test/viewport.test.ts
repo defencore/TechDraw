@@ -12,6 +12,7 @@ import {
   resizeViewport,
   toSheet,
   zoomAt,
+  viewportSafeArea,
   type ViewportMetrics,
   type ViewportState,
 } from '../src/ui/viewport';
@@ -126,4 +127,81 @@ test('a temporarily collapsed viewport still produces a finite usable transform'
   const transform = getViewportTransform(fitViewport(), { ...metrics, width: 0, height: 0 });
   assert.ok(Object.values(transform).every(Number.isFinite));
   assert.ok(transform.scale > 0);
+});
+
+test('a full canvas with floating-control insets preserves the old fitted paper global position exactly', () => {
+  const old = { ...metrics, height: metrics.height - 100 - 46 };
+  const full = { ...metrics, insets: { top: 100, right: 0, bottom: 46, left: 0 } };
+  for (const state of [fitViewport(), { zoom: 3.2, pan: [47, -29] as Point2 }]) {
+    const before = getViewportTransform(state, old),
+      after = getViewportTransform(state, full);
+    assert.equal(after.scale, before.scale);
+    assert.equal(after.x, before.x);
+    assert.equal(after.y, before.y + 100);
+  }
+});
+
+test('fit and cursor zoom use an asymmetric safe rectangle while allowing paper under the controls', () => {
+  const insetMetrics = { ...metrics, insets: { top: 117, right: 63, bottom: 41, left: 19 } };
+  const area = viewportSafeArea(insetMetrics),
+    fitted = fitViewport();
+  assert.deepEqual(area, { x: 19, y: 117, width: 918, height: 542 });
+  const corner = fromSheet([0, 0], fitted, insetMetrics);
+  const opposite = fromSheet([metrics.paperWidth, metrics.paperHeight], fitted, insetMetrics);
+  assert.ok(corner[0] >= area.x + metrics.padding! - 1e-9);
+  assert.ok(corner[1] >= area.y + metrics.padding! - 1e-9);
+  assert.ok(opposite[0] <= area.x + area.width - metrics.padding! + 1e-9);
+  assert.ok(opposite[1] <= area.y + area.height - metrics.padding! + 1e-9);
+  nearPoint(fromSheet([metrics.paperWidth / 2, metrics.paperHeight / 2], fitted, insetMetrics), [
+    area.x + area.width / 2,
+    area.y + area.height / 2,
+  ]);
+  const initial: ViewportState = { zoom: 1.8, pan: [83, -47] };
+  for (const cursor of [
+    [0, 0],
+    [1000, 700],
+    [478, 388],
+    [222, 44],
+  ] as Point2[]) {
+    const paper = toSheet(cursor, initial, insetMetrics);
+    const zoomed = zoomAt(initial, insetMetrics, cursor, 4);
+    nearPoint(toSheet(cursor, zoomed, insetMetrics), paper);
+    nearPoint(fromSheet(paper, zoomed, insetMetrics), cursor);
+  }
+  const zoomed = getViewportTransform(zoomAt(fitted, insetMetrics, [478, 388], 4), insetMetrics);
+  assert.ok(zoomed.y < area.y, 'Insets reserve fit space, not a clipping boundary');
+});
+
+test('resize and changing control insets retain the paper point at the safe-area centre', () => {
+  const before = { ...metrics, insets: { top: 100, right: 20, bottom: 46, left: 60 } };
+  const after = {
+    ...metrics,
+    width: 720,
+    height: 940,
+    insets: { top: 112, right: 40, bottom: 94, left: 10 },
+  };
+  const initial: ViewportState = { zoom: 3.5, pan: [250, -120] };
+  const a = viewportSafeArea(before),
+    b = viewportSafeArea(after);
+  const paper = toSheet([a.x + a.width / 2, a.y + a.height / 2], initial, before);
+  const resized = resizeViewport(initial, before, after);
+  assert.equal(resized.zoom, initial.zoom);
+  nearPoint(toSheet([b.x + b.width / 2, b.y + b.height / 2], resized, after), paper);
+  nearPoint(resizeViewport(resized, after, before).pan, initial.pan);
+  nearPoint(resizeViewport(fitViewport(), before, after).pan, [0, 0]);
+});
+
+test('invalid or oversized control insets cannot make a collapsed viewport non-finite', () => {
+  for (const viewport of [
+    { ...metrics, insets: { top: -20, right: NaN, bottom: Infinity, left: -1 } },
+    { ...metrics, width: 20, height: 10, insets: { top: 100, right: 200, bottom: 50, left: 300 } },
+    { ...metrics, width: 0, height: 0, insets: { top: 100, right: 0, bottom: 46, left: 0 } },
+  ]) {
+    const area = viewportSafeArea(viewport);
+    assert.ok(Object.values(area).every(Number.isFinite));
+    assert.ok(area.width >= 1 && area.height >= 1 && area.x >= 0 && area.y >= 0);
+    const transform = getViewportTransform(fitViewport(), viewport);
+    assert.ok(Object.values(transform).every(Number.isFinite));
+    assert.ok(transform.scale > 0);
+  }
 });

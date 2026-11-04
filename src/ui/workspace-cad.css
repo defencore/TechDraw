@@ -360,6 +360,10 @@
     --canvas-top: 144px;
     --selection-top: 108px;
   }
+  .workspace-dock {
+    width: 286px;
+    column-gap: 3px;
+  }
 }
 @media (max-width: 680px) {
   .command-search-trigger {
@@ -383,6 +387,12 @@
   }
   .workspace.focus-mode > .drawing-workspace {
     height: calc(100dvh - 60px);
+  }
+}
+@media (max-width: 650px) {
+  .canvas-shell {
+    --canvas-top: 196px;
+    --selection-top: 160px;
   }
 }
 @media print {

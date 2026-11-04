@@ -376,6 +376,52 @@ test('a crossing box adds intersected dimensions to the existing group and focus
   assert.ok(t.y + maxY * t.scale <= host.clientHeight - 39.99);
 });
 
+test('selection focus reads floating control insets and keeps complete annotation bounds clear of them', () => {
+  const dimensions = [annotation('one', 10), annotation('two', 100)];
+  const { canvas, host, sheet } = fixture(dimensions, ['one', 'two']);
+  const parent = {} as HTMLElement;
+  (host as unknown as { parentElement: HTMLElement }).parentElement = parent;
+  const originalStyle = Object.getOwnPropertyDescriptor(globalThis, 'getComputedStyle');
+  Object.defineProperty(globalThis, 'getComputedStyle', {
+    configurable: true,
+    value: (element: HTMLElement) => {
+      assert.equal(element, parent);
+      return {
+        getPropertyValue: (name: string) =>
+          name === '--canvas-top' ? '100px' : name === '--canvas-bottom' ? '46px' : '',
+      };
+    },
+  });
+  try {
+    canvas.fit();
+    const fitted = host.transform();
+    near(fitted.y + (sheet.height / 2) * fitted.scale, 100 + (host.clientHeight - 146) / 2);
+    assert.equal(canvas.fitSelection(), true);
+    const bounds = dimensions.map(
+      (d) => dimensionGeometry(d, sheet.viewTransforms.front, 2).bounds,
+    );
+    const minX = Math.min(...bounds.map((b) => b.minX)),
+      maxX = Math.max(...bounds.map((b) => b.maxX));
+    const minY = Math.min(...bounds.map((b) => b.minY)),
+      maxY = Math.max(...bounds.map((b) => b.maxY));
+    const t = host.transform();
+    near(t.x + ((minX + maxX) / 2) * t.scale, host.clientWidth / 2);
+    near(t.y + ((minY + maxY) / 2) * t.scale, 100 + (host.clientHeight - 146) / 2);
+    assert.ok(t.x + minX * t.scale >= 39.99);
+    assert.ok(t.x + maxX * t.scale <= host.clientWidth - 39.99);
+    assert.ok(t.y + minY * t.scale >= 100 + 39.99);
+    assert.ok(t.y + maxY * t.scale <= host.clientHeight - 46 - 39.99);
+    assert.equal(
+      host.paper.innerHTML,
+      sheet.svg,
+      'Viewport focus must not regenerate the physical drawing',
+    );
+  } finally {
+    if (originalStyle) Object.defineProperty(globalThis, 'getComputedStyle', originalStyle);
+    else Reflect.deleteProperty(globalThis, 'getComputedStyle');
+  }
+});
+
 test('box cancellation, tool changes and small clicks leave dimensions and selection untouched', () => {
   const { canvas, host, marquees, edited, groups } = fixture([annotation('one', 10)], ['one']);
   const overlayActive = boxEvents(canvas);

@@ -13,6 +13,14 @@ export interface ViewportMetrics {
   paperWidth: number;
   paperHeight: number;
   padding?: number;
+  /** Floating controls reserve fit space while the paper can pan underneath them. */
+  insets?: { top: number; right: number; bottom: number; left: number };
+}
+export interface ViewportSafeArea {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 export interface ViewportTransform {
@@ -35,13 +43,37 @@ const finite = (value: number) => (Number.isFinite(value) ? value : 0);
 
 function normalizedMetrics(metrics: ViewportMetrics) {
   // Hidden or temporarily collapsed containers must not create infinite transforms.
+  const width = positive(metrics.width),
+    height = positive(metrics.height);
+  const pair = (
+    start: number | undefined,
+    end: number | undefined,
+    extent: number,
+  ): [number, number] => {
+    const a = Math.max(0, finite(start ?? 0)),
+      b = Math.max(0, finite(end ?? 0));
+    const factor = a + b > extent - 1 ? Math.max(0, extent - 1) / (a + b) : 1;
+    return [a * factor, b * factor];
+  };
+  const [left, right] = pair(metrics.insets?.left, metrics.insets?.right, width);
+  const [top, bottom] = pair(metrics.insets?.top, metrics.insets?.bottom, height);
   return {
-    width: positive(metrics.width),
-    height: positive(metrics.height),
+    width,
+    height,
     paperWidth: positive(metrics.paperWidth),
     paperHeight: positive(metrics.paperHeight),
     padding: Math.max(0, finite(metrics.padding ?? 24)),
+    area: {
+      x: left,
+      y: top,
+      width: Math.max(1, width - left - right),
+      height: Math.max(1, height - top - bottom),
+    },
   };
+}
+
+export function viewportSafeArea(metrics: ViewportMetrics): ViewportSafeArea {
+  return normalizedMetrics(metrics).area;
 }
 
 export function fitViewport(): ViewportState {
@@ -53,15 +85,15 @@ export function getViewportTransform(
   state: ViewportState,
   metrics: ViewportMetrics,
 ): ViewportTransform {
-  const { width, height, paperWidth, paperHeight, padding } = normalizedMetrics(metrics);
+  const { area, paperWidth, paperHeight, padding } = normalizedMetrics(metrics);
   const scale =
     Math.min(
-      Math.max(1, width - 2 * padding) / paperWidth,
-      Math.max(1, height - 2 * padding) / paperHeight,
+      Math.max(1, area.width - 2 * padding) / paperWidth,
+      Math.max(1, area.height - 2 * padding) / paperHeight,
     ) * clampViewportZoom(state.zoom);
   return {
-    x: (width - paperWidth * scale) / 2 + finite(state.pan[0]),
-    y: (height - paperHeight * scale) / 2 + finite(state.pan[1]),
+    x: area.x + (area.width - paperWidth * scale) / 2 + finite(state.pan[0]),
+    y: area.y + (area.height - paperHeight * scale) / 2 + finite(state.pan[1]),
     scale,
   };
 }
@@ -88,13 +120,15 @@ export function zoomAt(
   const zoom = clampViewportZoom(newZoom);
   const pan: Point2 = [finite(state.pan[0]), finite(state.pan[1])];
   if (zoom === previousZoom) return { zoom, pan };
-  const { width, height } = normalizedMetrics(metrics);
+  const area = viewportSafeArea(metrics);
+  const cx = area.x + area.width / 2,
+    cy = area.y + area.height / 2;
   const ratio = zoom / previousZoom;
   return {
     zoom,
     pan: [
-      point[0] - width / 2 - (point[0] - width / 2 - pan[0]) * ratio,
-      point[1] - height / 2 - (point[1] - height / 2 - pan[1]) * ratio,
+      point[0] - cx - (point[0] - cx - pan[0]) * ratio,
+      point[1] - cy - (point[1] - cy - pan[1]) * ratio,
     ],
   };
 }
@@ -112,13 +146,17 @@ export function resizeViewport(
   oldMetrics: ViewportMetrics,
   newMetrics: ViewportMetrics,
 ): ViewportState {
-  const previous = normalizedMetrics(oldMetrics);
-  const next = normalizedMetrics(newMetrics);
-  const point = toSheet([previous.width / 2, previous.height / 2], state, oldMetrics);
+  const previous = viewportSafeArea(oldMetrics);
+  const next = viewportSafeArea(newMetrics);
+  const point = toSheet(
+    [previous.x + previous.width / 2, previous.y + previous.height / 2],
+    state,
+    oldMetrics,
+  );
   const centered = { zoom: clampViewportZoom(state.zoom), pan: [0, 0] as Point2 };
   const screen = fromSheet(point, centered, newMetrics);
   return {
     zoom: centered.zoom,
-    pan: [next.width / 2 - screen[0], next.height / 2 - screen[1]],
+    pan: [next.x + next.width / 2 - screen[0], next.y + next.height / 2 - screen[1]],
   };
 }
