@@ -3,6 +3,7 @@ import { after, test } from 'node:test';
 import { DrawingCanvas } from '../src/ui/drawing-canvas';
 import { renderDrawing } from '../src/drawing/render';
 import { drawingPage } from '../src/drawing/page-layout';
+import { dimensionGeometry } from '../src/drawing/dimension-geometry';
 import { defaultSettings } from '../src/state';
 import type { Dimension, Part, Point2, Projection } from '../src/model';
 
@@ -90,6 +91,7 @@ class CanvasHost {
     if (type === 'pointerup' || type === 'pointercancel')
       this.releasePointerCapture(event.pointerId);
     while (frames.length) frames.shift()!(0);
+    return event;
   }
   transform() {
     const match = this.paper.style.transform.match(
@@ -144,9 +146,13 @@ function fixture(dimensions: Dimension[] = [], selectedDimensionIds: string[] = 
     hints: string[] = [],
     edited: Dimension[] = [],
     groups: Dimension[][] = [],
-    selections: { id?: string; additive?: boolean }[] = [];
+    selections: { id?: string; additive?: boolean }[] = [],
+    marquees: { ids: string[]; additive: boolean }[] = [],
+    contexts: { clientX: number; clientY: number; dimensionId?: string }[] = [];
   const canvas = new DrawingCanvas({
     select: (id, additive) => selections.push({ id, additive }),
+    selectMany: (ids, additive) => marquees.push({ ids, additive }),
+    contextMenu: (position) => contexts.push(position),
     add: (dimension) => added.push(dimension),
     edit: (dimension) => edited.push(dimension),
     editMany: (dimensions) => groups.push(dimensions),
@@ -173,7 +179,21 @@ function fixture(dimensions: Dimension[] = [], selectedDimensionIds: string[] = 
     host.dispatch('pointerdown', { clientX, clientY });
     host.dispatch('pointerup', { clientX, clientY });
   };
-  return { host, canvas, sheet, client, click, added, errors, hints, edited, groups, selections };
+  return {
+    host,
+    canvas,
+    sheet,
+    client,
+    click,
+    added,
+    errors,
+    hints,
+    edited,
+    groups,
+    selections,
+    marquees,
+    contexts,
+  };
 }
 const near = (actual: number, expected: number) =>
   assert.ok(Math.abs(actual - expected) < 1e-8, `${actual} must equal ${expected}`);
@@ -285,6 +305,197 @@ function annotationPicker(canvas: DrawingCanvas) {
     patched,
   };
 }
+
+function boxEvents(canvas: DrawingCanvas) {
+  // The real overlay is a workspace sibling; gesture tests only need to observe its lifetime.
+  let active = false;
+  const controller = canvas as unknown as {
+    gesture?: { moved: boolean; marquee?: unknown };
+    marqueeFeedback(): void;
+  };
+  controller.marqueeFeedback = () => {
+    active = Boolean(controller.gesture?.marquee && controller.gesture.moved);
+  };
+  return () => active;
+}
+
+test('box selection contains full annotations without panning, dragging or changing sheet layout', () => {
+  const dimensions = [annotation('one', 10), annotation('two', 30)];
+  const { canvas, host, sheet, client, marquees, edited, groups } = fixture(dimensions);
+  const overlayActive = boxEvents(canvas);
+  canvas.setTool('box-select');
+  const geometries = dimensions.map((d) => dimensionGeometry(d, sheet.viewTransforms.front, 2));
+  const start = client([
+    Math.min(...geometries.map((g) => g.bounds.minX)) - 1,
+    Math.min(...geometries.map((g) => g.bounds.minY)) - 1,
+  ]);
+  const end = client([
+    Math.max(...geometries.map((g) => g.bounds.maxX)) + 1,
+    Math.max(...geometries.map((g) => g.bounds.maxY)) + 1,
+  ]);
+  const viewport = host.transform(),
+    svg = sheet.svg;
+  host.dispatch('pointerdown', { clientX: start[0], clientY: start[1] });
+  host.dispatch('pointermove', { clientX: end[0], clientY: end[1] });
+  assert.equal(overlayActive(), true);
+  host.dispatch('wheel', { deltaY: -100 });
+  assert.equal(canvas.fitSelection(), false, 'Focus must not change a captured box transform');
+  host.dispatch('pointerup', { clientX: end[0], clientY: end[1] });
+  assert.deepEqual(marquees, [{ ids: ['one', 'two'], additive: false }]);
+  assert.equal(overlayActive(), false);
+  assert.deepEqual(host.transform(), viewport);
+  assert.equal(edited.length + groups.length, 0);
+  assert.equal(sheet.svg, svg);
+  assert.equal(host.captured.size, 0);
+});
+
+test('a crossing box adds intersected dimensions to the existing group and focus fits its full paper bounds', () => {
+  const dimensions = [annotation('one', 10), annotation('two', 30)];
+  const { canvas, host, sheet, client, marquees } = fixture(dimensions, ['two']);
+  boxEvents(canvas);
+  canvas.setTool('box-select');
+  const view = sheet.viewTransforms.front;
+  const start = client([view.x + 52, view.y + 11]),
+    end = client([view.x + 48, view.y + 9]);
+  host.dispatch('pointerdown', { clientX: start[0], clientY: start[1], shiftKey: true });
+  host.dispatch('pointermove', { clientX: end[0], clientY: end[1], shiftKey: true });
+  host.dispatch('pointerup', { clientX: end[0], clientY: end[1], shiftKey: true });
+  assert.deepEqual(marquees, [{ ids: ['one'], additive: true }]);
+  assert.equal(canvas.fitSelection(), true);
+  const bounds = dimensions.map((d) => dimensionGeometry(d, view, 2).bounds);
+  const minX = Math.min(...bounds.map((b) => b.minX)),
+    maxX = Math.max(...bounds.map((b) => b.maxX));
+  const minY = Math.min(...bounds.map((b) => b.minY)),
+    maxY = Math.max(...bounds.map((b) => b.maxY));
+  const t = host.transform();
+  near(t.x + ((minX + maxX) / 2) * t.scale, host.clientWidth / 2);
+  near(t.y + ((minY + maxY) / 2) * t.scale, host.clientHeight / 2);
+  assert.ok(t.x + minX * t.scale >= 39.99);
+  assert.ok(t.x + maxX * t.scale <= host.clientWidth - 39.99);
+  assert.ok(t.y + minY * t.scale >= 39.99);
+  assert.ok(t.y + maxY * t.scale <= host.clientHeight - 39.99);
+});
+
+test('box cancellation, tool changes and small clicks leave dimensions and selection untouched', () => {
+  const { canvas, host, marquees, edited, groups } = fixture([annotation('one', 10)], ['one']);
+  const overlayActive = boxEvents(canvas);
+  assert.equal(fixture().canvas.fitSelection(), false);
+  canvas.setTool('box-select');
+  host.dispatch('pointerdown');
+  host.dispatch('pointermove', { clientX: 201, clientY: 201 });
+  host.dispatch('pointerup', { clientX: 201, clientY: 201 });
+  assert.equal(marquees.length, 0);
+  for (const cancel of [
+    () => canvas.cancel(),
+    () => canvas.setTool('select'),
+    () => host.dispatch('pointercancel'),
+  ]) {
+    canvas.setTool('box-select');
+    host.dispatch('pointerdown');
+    host.dispatch('pointermove', { clientX: 300, clientY: 300 });
+    assert.equal(overlayActive(), true);
+    cancel();
+    host.dispatch('pointerup', { clientX: 300, clientY: 300 });
+    assert.equal(overlayActive(), false);
+    assert.equal(host.captured.size, 0);
+  }
+  assert.equal(marquees.length + edited.length + groups.length, 0);
+});
+
+test('context menus focus clicked dimensions, retain selected groups and stay suppressed during pan', () => {
+  const dimensions = [annotation('one', 10), annotation('two', 20), annotation('three', 30)];
+  const { canvas, host, contexts, selections, sheet, client, groups } = fixture(dimensions, [
+    'one',
+    'two',
+  ]);
+  const picker = annotationPicker(canvas);
+  picker.pick('one');
+  assert.equal(host.dispatch('contextmenu', { clientX: 330, clientY: 220 }).defaultPrevented, true);
+  assert.deepEqual(contexts.at(-1), { clientX: 330, clientY: 220, dimensionId: 'one' });
+  assert.deepEqual(selections.at(-1), { id: 'one', additive: false });
+  const start = client([sheet.viewTransforms.front.x + 50, sheet.viewTransforms.front.y + 10]);
+  host.dispatch('pointerdown', { clientX: start[0], clientY: start[1] });
+  host.dispatch('pointermove', { clientX: start[0], clientY: start[1] + 10 });
+  host.dispatch('pointerup', { clientX: start[0], clientY: start[1] + 10 });
+  assert.equal(groups[0].length, 2, 'Right-clicking a selected member must retain its group');
+  picker.pick('three');
+  host.dispatch('contextmenu');
+  assert.deepEqual(selections.at(-1), { id: 'three', additive: false });
+  picker.pick();
+  const selectionCalls = selections.length;
+  host.dispatch('contextmenu');
+  assert.equal(selections.length, selectionCalls, 'Blank right-click preserves the selection');
+  const menuCalls = contexts.length;
+  canvas.setTool('pan');
+  host.dispatch('contextmenu');
+  canvas.setTool('select');
+  canvas.setPanKey(true);
+  host.dispatch('contextmenu');
+  assert.equal(contexts.length, menuCalls);
+});
+
+test('the marquee is an off-page workspace overlay and cancellation removes it without touching export markup', () => {
+  const { canvas, host, sheet } = fixture([annotation('one', 10)]);
+  const source = host.paper.innerHTML;
+  const overlays: {
+    dataset: Record<string, string>;
+    innerHTML: string;
+    attributes: Record<string, string>;
+    setAttribute(name: string, value: string): void;
+    remove(): void;
+  }[] = [];
+  const originalDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  Object.defineProperty(globalThis, 'document', {
+    configurable: true,
+    value: {
+      createElementNS() {
+        const overlay = {
+          dataset: {},
+          innerHTML: '',
+          attributes: {} as Record<string, string>,
+          setAttribute(name: string, value: string) {
+            this.attributes[name] = value;
+          },
+          remove() {
+            overlays.splice(overlays.indexOf(this), 1);
+          },
+        };
+        return overlay;
+      },
+    },
+  });
+  const query = host.querySelector.bind(host);
+  host.querySelector = ((selector: string) =>
+    selector === '[data-canvas-marquee]'
+      ? overlays[0]
+      : query(selector)) as typeof host.querySelector;
+  (host as unknown as { append(node: (typeof overlays)[number]): void }).append = (node) =>
+    overlays.push(node);
+  try {
+    canvas.setTool('box-select');
+    host.dispatch('pointerdown', { clientX: 200, clientY: 200 });
+    host.dispatch('pointermove', { clientX: 300, clientY: 300 });
+    assert.equal(overlays.length, 1);
+    const overlay = overlays[0];
+    assert.ok('canvasMarquee' in overlay.dataset);
+    assert.equal(overlay.attributes.viewBox, '0 0 800 600');
+    assert.match(overlay.attributes.style, /pointer-events:none/);
+    assert.match(overlay.innerHTML, /x="100" y="150" width="100" height="100"/);
+    assert.doesNotMatch(overlay.innerHTML, /stroke-dasharray/);
+    host.dispatch('pointermove', { clientX: 150, clientY: 300 });
+    assert.equal(overlays[0], overlay);
+    assert.match(overlay.innerHTML, /stroke-dasharray/);
+    assert.equal(host.paper.innerHTML, source);
+    assert.equal(sheet.svg, source);
+    assert.doesNotMatch(sheet.svg, /canvas-marquee/);
+    canvas.cancel();
+    assert.equal(overlays.length, 0);
+    assert.equal(host.captured.size, 0);
+  } finally {
+    if (originalDocument) Object.defineProperty(globalThis, 'document', originalDocument);
+    else Reflect.deleteProperty(globalThis, 'document');
+  }
+});
 
 test('group selection preserves a plain-clicked member and modifier removal never begins a drag', () => {
   const { canvas, host, selections, edited, groups } = fixture(

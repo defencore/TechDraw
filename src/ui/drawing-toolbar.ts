@@ -1,53 +1,10 @@
-import type { DimensionKind } from '../model';
+import type { CanvasTool } from './drawing-canvas';
+import { dimensionTools } from './command-registry';
 import { button } from './components';
 import type { GridSettings } from './drawing-grid';
 
-export const dimensionTools: {
-  id: DimensionKind;
-  label: string;
-  icon: string;
-  shortcut: string;
-}[] = [
-  {
-    id: 'horizontal',
-    label: 'Horizontal',
-    icon: 'dimensionHorizontal',
-    shortcut: 'H',
-  },
-  {
-    id: 'vertical',
-    label: 'Vertical',
-    icon: 'dimensionVertical',
-    shortcut: 'V',
-  },
-  {
-    id: 'aligned',
-    label: 'Aligned',
-    icon: 'dimensionAligned',
-    shortcut: 'L',
-  },
-  {
-    id: 'diameter',
-    label: 'Diameter',
-    icon: 'dimensionDiameter',
-    shortcut: 'D',
-  },
-  {
-    id: 'radius',
-    label: 'Radius',
-    icon: 'dimensionRadius',
-    shortcut: 'R',
-  },
-  {
-    id: 'angle',
-    label: 'Angle',
-    icon: 'dimensionAngle',
-    shortcut: 'A',
-  },
-];
-
 interface ToolbarContext {
-  tool: 'select' | 'pan' | DimensionKind;
+  tool: CanvasTool;
   enabled: boolean;
   canUndo: boolean;
   canRedo: boolean;
@@ -84,7 +41,7 @@ export function renderWorkspaceControls({
     );
   const divider = '<span class="dock-divider" aria-hidden="true"></span>';
   return `<div class="workspace-dock" role="toolbar" aria-label="Drawing tools">
-    <div class="dock-group navigation-tools" role="group" aria-label="Navigation">${control('tool:select', 'Select and move dimensions', 'pointer', { selected: tool === 'select', shortcut: 'Escape', keyHint: 'Esc' })}${control('tool:pan', 'Pan drawing', 'hand', { selected: tool === 'pan', keyHint: 'Space' })}</div>
+    <div class="dock-group navigation-tools" role="group" aria-label="Navigation">${control('tool:select', 'Select and move dimensions', 'pointer', { selected: tool === 'select', shortcut: 'Escape', keyHint: 'Esc' })}${control('tool:box-select', 'Box select dimensions', 'boxSelect', { selected: tool === 'box-select', shortcut: 'B' })}${control('tool:pan', 'Pan drawing', 'hand', { selected: tool === 'pan', shortcut: 'P' })}</div>
     ${divider}
     <div class="dock-group dimension-tools" role="group" aria-label="Add dimensions">${dimensionTools.map(({ id, label, icon, shortcut }) => control(`tool:${id}`, label, icon, { shortcut, selected: tool === id, dimension: true })).join('')}</div>
     ${divider}

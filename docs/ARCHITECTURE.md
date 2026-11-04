@@ -4,50 +4,57 @@ The application is a static TypeScript/Vite project with a small shared data mod
 
 ## Module map
 
-| Module                                                     | Responsibility                                                                                     |
-| ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `src/model.ts`                                             | Serializable types for parts, projections, dimensions, sheet settings and cached view layouts      |
-| `src/measurements.ts`                                      | Orthographic linear and angular measurement rules and geometry validation                          |
-| `src/project.ts`                                           | Versioned project serialization and validation of imported workspace data                          |
-| `src/cad/client.ts`                                        | Worker lifecycle, request IDs, progress, cancellation and timeout                                  |
-| `src/cad/worker.ts`                                        | Load the bundled WASM kernel and handle import/demo requests                                       |
-| `src/cad/engine.ts`                                        | STEP transfer, unit normalization, solid selection, precise HLR projections and analytic edge data |
-| `src/cad/step-metadata.ts`                                 | Product names and assembly relationships; never geometric parsing                                  |
-| `src/drawing/dimensions.ts`                                | Automatic geometric dimension suggestions, coverage warnings and numeric labels                    |
-| `src/drawing/suggestions.ts`                               | Refresh automatic suggestions while retaining manual measurements and explicit specifications      |
-| `src/drawing/tolerances.ts`                                | Validation of explicit numeric deviations and manually entered fit designations                    |
-| `src/drawing/dimension-label.ts`                           | Shared nominal/tolerance text runs and bounds for rendering, picking and layout                    |
-| `src/drawing/dimension-geometry.ts`                        | Shared physical annotation primitives and bounds for SVG rendering and placement                   |
-| `src/drawing/grid-coordinates.ts`                          | Sheet grid validation and numeric quantization, independent of the interface                       |
-| `src/drawing/dimension-placement.ts`                       | Pure side placement, shared alignment and cascade spacing for selected annotation groups           |
-| `src/drawing/page-layout.ts`                               | Pure paper areas, standard scales, projection bounds, aligned view packing and fit checks          |
-| `src/drawing/layout.ts`                                    | Arrange annotations at each candidate scale and initialize their persistent physical layout        |
-| `src/drawing/render.ts`                                    | Serialize the physical layout, templates, geometry and annotations into an SVG sheet               |
-| `src/drawing/gost-form1.ts`                                | GOST 2.104-68 Form 1 frame geometry and English/Ukrainian sheet labels                             |
-| `src/drawing/title-block-data.ts`                          | Shared editable document fields, defaults and field keys                                           |
-| `src/drawing/pdf.ts`                                       | Convert the same SVG sheet into correctly sized PDF pages                                          |
-| `src/state.ts`                                             | Drawing defaults, workspace shape and per-part dimension/layout snapshot history                   |
-| `src/main.ts`                                              | Workspace interaction, import queue, selected parts, project files and accessible controls         |
-| `src/ui/drawing-canvas.ts`                                 | Persistent canvas controller for pointer gestures, draft placement, selection and viewport updates |
-| `src/ui/drawing-toolbar.ts`                                | Compact floating icon dock with tooltips and separate viewport-control dock                        |
-| `src/ui/drawing-feedback.ts`                               | Persistent sheet warnings with layout and page-setup actions                                       |
-| `src/ui/dimension-editor.ts`                               | Compact selected-dimension panel with tolerance controls and optional position/text settings       |
-| `src/ui/dimension-placement-editor.ts`                     | Group selection, view selection, side actions, alignment mode and paper-spacing controls           |
-| `src/ui/viewport.ts`                                       | Pure fit, pan, cursor-anchored zoom and viewport/sheet coordinate conversion                       |
-| `src/ui/geometry-picking.ts`                               | Screen-radius picking of edges, endpoints and centres with model-coordinate references             |
-| `src/ui/dimension-picking.ts`                              | Screen-space picking of annotation labels and lines                                                |
-| `src/ui/dimension-selection.ts`                            | Annotation group membership and focus with explicit checkbox state and stale-ID pruning            |
-| `src/ui/dimension-drag.ts`                                 | Pure paper-space annotation dragging and draft positioning                                         |
-| `src/ui/drawing-grid.ts`                                   | Workspace-only paper grid rendering and paper-coordinate snapping                                  |
-| `src/ui/workspace-preferences.ts`                          | Strict browser persistence of independent grid visibility, snapping and spacing preferences        |
-| `src/ui/tolerance-editor.ts`                               | Tolerance-mode buttons, numeric/sign controls, draft preview and explicit Apply/Clear actions      |
-| `src/ui/tolerance-controller.ts`                           | Per-annotation raw drafts, editor lifecycle, validation, keyboard handling and explicit commits    |
-| `src/ui/title-block-editor.ts`                             | English editor for document data, sign-offs, changes, inventory and technical requirements         |
-| `src/ui/title-block-cache.ts`                              | Whitelisted browser persistence of document fields and selected template                           |
-| `src/ui/views.ts`, `components.ts`, `utils.ts`, `icons.ts` | Workspace views, accessible controls, escaping and icons                                           |
-| `src/style.css`                                            | Responsive layout and both colour themes                                                           |
-| `test/`                                                    | Geometry and drawing regression tests                                                              |
-| `public/examples/`                                         | Real, original STEP test fixtures                                                                  |
+| Module                                                     | Responsibility                                                                                      |
+| ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `src/model.ts`                                             | Serializable types for parts, projections, dimensions, sheet settings and cached view layouts       |
+| `src/measurements.ts`                                      | Orthographic linear and angular measurement rules and geometry validation                           |
+| `src/project.ts`                                           | Versioned project serialization and validation of imported workspace data                           |
+| `src/cad/client.ts`                                        | Worker lifecycle, request IDs, progress, cancellation and timeout                                   |
+| `src/cad/worker.ts`                                        | Load the bundled WASM kernel and handle import/demo requests                                        |
+| `src/cad/engine.ts`                                        | STEP transfer, unit normalization, solid selection, precise HLR projections and analytic edge data  |
+| `src/cad/step-metadata.ts`                                 | Product names and assembly relationships; never geometric parsing                                   |
+| `src/drawing/dimensions.ts`                                | Automatic geometric dimension suggestions, coverage warnings and numeric labels                     |
+| `src/drawing/suggestions.ts`                               | Refresh automatic suggestions while retaining manual measurements and explicit specifications       |
+| `src/drawing/tolerances.ts`                                | Validation of explicit numeric deviations and manually entered fit designations                     |
+| `src/drawing/dimension-label.ts`                           | Shared nominal/tolerance text runs and bounds for rendering, picking and layout                     |
+| `src/drawing/dimension-geometry.ts`                        | Shared physical annotation primitives and bounds for SVG rendering and placement                    |
+| `src/drawing/grid-coordinates.ts`                          | Sheet grid validation and numeric quantization, independent of the interface                        |
+| `src/drawing/dimension-placement.ts`                       | Pure side placement, shared alignment and cascade spacing for selected annotation groups            |
+| `src/drawing/page-layout.ts`                               | Pure paper areas, standard scales, projection bounds, aligned view packing and fit checks           |
+| `src/drawing/layout.ts`                                    | Arrange annotations at each candidate scale and initialize their persistent physical layout         |
+| `src/drawing/render.ts`                                    | Serialize the physical layout, templates, geometry and annotations into an SVG sheet                |
+| `src/drawing/gost-form1.ts`                                | GOST 2.104-68 Form 1 frame geometry and English/Ukrainian sheet labels                              |
+| `src/drawing/title-block-data.ts`                          | Shared editable document fields, defaults and field keys                                            |
+| `src/drawing/pdf.ts`                                       | Convert the same SVG sheet into correctly sized PDF pages                                           |
+| `src/state.ts`                                             | Drawing defaults, workspace shape and per-part dimension/layout snapshot history                    |
+| `src/workspace-document.ts`                                | Document edits, per-part history, physical layout lifecycle, part removal and project replacement   |
+| `src/main.ts`                                              | Application orchestration, shared command dispatch, import/export and controller integration        |
+| `src/ui/command-registry.ts`                               | Canonical commands, availability reasons, active state, shortcuts and typing-safe shortcut matching |
+| `src/ui/command-palette.ts`                                | Persistent searchable command dialog with keyboard navigation and live availability checks          |
+| `src/ui/context-menu.ts`                                   | Contextual command menu with shared availability, keyboard navigation and focus return              |
+| `src/ui/drawing-canvas.ts`                                 | Persistent canvas controller for pointer gestures, draft placement, selection and viewport updates  |
+| `src/ui/drawing-toolbar.ts`                                | Compact floating icon dock with tooltips and separate viewport-control dock                         |
+| `src/ui/drawing-feedback.ts`                               | Persistent sheet warnings with layout and page-setup actions                                        |
+| `src/ui/dimension-editor.ts`                               | Compact selected-dimension panel with tolerance controls and optional position/text settings        |
+| `src/ui/dimension-browser.ts`                              | Pure dimension filtering plus searchable list rendering with visible and hidden-selection counts    |
+| `src/ui/dimension-placement-editor.ts`                     | Group selection, view selection, side actions, alignment mode and paper-spacing controls            |
+| `src/ui/viewport.ts`                                       | Pure fit, pan, cursor-anchored zoom and viewport/sheet coordinate conversion                        |
+| `src/ui/geometry-picking.ts`                               | Screen-radius picking of edges, endpoints and centres with model-coordinate references              |
+| `src/ui/dimension-picking.ts`                              | Screen-space picking of annotation labels and lines                                                 |
+| `src/ui/dimension-selection.ts`                            | Annotation group membership and focus with explicit checkbox state and stale-ID pruning             |
+| `src/ui/marquee-selection.ts`                              | Directional containment/crossing selection against annotation lines, arcs and rotated labels        |
+| `src/ui/dimension-drag.ts`                                 | Pure paper-space annotation dragging and draft positioning                                          |
+| `src/ui/drawing-grid.ts`                                   | Workspace-only paper grid rendering and paper-coordinate snapping                                   |
+| `src/ui/workspace-preferences.ts`                          | Strict browser persistence of independent grid visibility, snapping and spacing preferences         |
+| `src/ui/tolerance-editor.ts`                               | Tolerance-mode buttons, numeric/sign controls, draft preview and explicit Apply/Clear actions       |
+| `src/ui/tolerance-controller.ts`                           | Per-annotation raw drafts, editor lifecycle, validation, keyboard handling and explicit commits     |
+| `src/ui/title-block-editor.ts`                             | English editor for document data, sign-offs, changes, inventory and technical requirements          |
+| `src/ui/title-block-cache.ts`                              | Whitelisted browser persistence of document fields and selected template                            |
+| `src/ui/views.ts`, `components.ts`, `utils.ts`, `icons.ts` | Workspace views, accessible controls, escaping and icons                                            |
+| `src/style.css`                                            | Responsive layout and both colour themes                                                            |
+| `src/ui/workspace-cad.css`                                 | Contextual browser, selection actions, focus mode, command dialog and menu presentation             |
+| `test/`                                                    | Geometry and drawing regression tests                                                               |
+| `public/examples/`                                         | Real, original STEP test fixtures                                                                   |
 
 ## Data flow
 
@@ -59,7 +66,7 @@ The application is a static TypeScript/Vite project with a small shared data mod
 6. Automatic dimension rules create editable `Dimension` objects in model units. Balanced suggestions prioritize readability; the full-detail mode includes all recognized baseline coordinates. Refreshing suggestions retains manual measurements and explicit specifications on matched automatic measurements. Dimension lanes arrange nested measurements so shorter dimensions sit closer to the part. Paper offsets and label movement remain independent of drawing scale.
 7. `dimension-geometry.ts` describes physical annotation primitives and bounds. `page-layout.ts` packs views using their contours, captions, centre lines and annotations, with aligned front/top X datums and front/right Y datums. `layout.ts` evaluates annotation packing at each candidate standard scale before SVG serialization. The chosen scale and four view transforms become a cached `DrawingLayout`; the renderer serializes that layout. Manual annotation changes reuse it, so the part does not move or shrink while a dimension is edited. Explicit Auto/Auto layout operations or changes to paper format, orientation, template or drawing scale can regenerate it.
 8. `DrawingCanvas` keeps the interaction element mounted, owns pointer capture and draws temporary feedback separately from committed dimensions. Geometry selection creates a draft; moving and clicking places it. During an existing annotation's drag, only that annotation's SVG is patched. The completed edit commits one history operation.
-9. A `DimensionSnapshot` stores dimensions and the optional cached layout together. History clones snapshots, keeps up to 60 operations and clears redo after a new edit. Undoing Auto/Arrange restores the previous view positions as well as the annotations.
+9. `WorkspaceDocument` owns dimension commits, per-part histories, layout invalidation, part removal and project replacement. A `DimensionSnapshot` stores dimensions and the optional cached layout together. History clones snapshots, keeps up to 60 operations and clears redo after a new edit. No-op annotation edits do not add snapshots. Undoing Auto/Arrange restores the previous view positions as well as the annotations. UI selection is pruned against the resulting document, independently of snapshot data.
 10. Project files persist cached layouts, and PDF export passes the same layout to the shared renderer. Exported sheets therefore preserve the preview's committed geometry and dimension positions. Viewport zoom and pan are display state and do not affect the drawing or exported PDF.
 11. Editable title-block fields have a separate browser cache. Their shared field list comes from `title-block-data.ts`; the editor, project parser and cache use the same keys. Entries and the selected template are restored on reload and reused when new parts are imported. **Clear** resets document fields and removes the stored cache. Model files and geometry never enter this cache.
 
@@ -82,6 +89,12 @@ Grid preferences use the separate `techdraw:grid` browser-storage key. Visibilit
 `DimensionSelection` owns group membership and the focused annotation together. Shift/Ctrl-click toggles membership, plain selection of an existing member preserves its group, and checkbox changes explicitly set membership. Removing or regenerating dimensions prunes stale IDs and repairs focus. Group placement works separately for each view and compatible parallel orientation: horizontal dimensions move Top/Bottom, vertical dimensions Left/Right, radial labels to any side, and aligned dimensions to compatible sides. Angles are left unchanged. Cascade assigns separate lanes, while Align shares a baseline only for disjoint complete spans with enough label clearance. Nested or colliding spans retain separate lanes. Placement changes annotation positions while retaining the cached view layout and all measured geometry and specifications.
 
 Geometry and dimension picking use screen-pixel tolerances so their hit areas remain usable at different zoom levels. A compact floating dock exposes six visible dimension icons: Horizontal (`H`), Vertical (`V`), Aligned (`L`), Diameter (`D`), Radius (`R`) and Angle (`A`). Each icon has an accessible name, a tool/shortcut tooltip and an active state. A separate zoom dock contains viewport controls. Shortcuts are inactive while text fields are being edited. A new dimension follows a pick → draft preview → click-to-place interaction. Selecting a dimension opens its compact editing panel; existing labels and dimension lines can be dragged. `Esc` cancels the pending operation; undo/redo acts on committed dimension/layout snapshots.
+
+The explicit Box Select tool (`B`) keeps empty-space drag in ordinary Select mode available for panning. Left-to-right boxes contain entire annotation geometry; right-to-left boxes cross exact line/arc geometry or rotated label rectangles. Shift/Ctrl/Meta adds the box result to the current group. Small clicks, cancellation and tool changes leave the selection unchanged. The application returns to Select after a completed box, so the group is immediately draggable. Fit Selection (`F`) uses the selected annotation bounds without changing the physical drawing layout. Focus mode (`Shift+F`) hides side panels; opening an inspector command reveals them again.
+
+`dimension-browser.ts` filters the annotation list by view, type and normalized query text, including nominal values, structured tolerances and notes. It does not modify group membership or the geometry. Updating the result region leaves the search caret and tolerance editor mounted. The inspector prioritizes a single annotation editor, expands group arrangement for multiple selections, and keeps unused controls in disclosures. Selected annotations hidden by filters are counted explicitly because group actions still include them.
+
+`command-registry.ts` is the shared source for command identity, availability explanations, active states and shortcut metadata. Dock, palette, context-menu and keyboard actions reach the same dispatcher, which checks current availability again before execution. Native editing retains letter keys, selection, deletion and text undo; project saving and command search remain global while editing. The command palette (`Ctrl/⌘+K`) lives outside workspace rerenders and keeps its search field, keyboard focus and current availability. Context menus use the same command metadata; clicking a selected annotation preserves the group, clicking another focuses that annotation, and right-clicking empty sheet space preserves the current group.
 
 ## Dimension tolerances
 

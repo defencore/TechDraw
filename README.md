@@ -15,6 +15,7 @@ The Open CASCADE WebAssembly kernel imports STEP geometry and computes precise h
 - Edit a selected dimension in a compact panel with tolerance-mode buttons for None, ±, upper/lower deviations or a manually entered fit designation. Tolerances remain editable in saved projects and appear in PDF exports.
 - Arrange smaller dimensions inside larger spans, with separate lanes for overlapping dimensions.
 - Select dimension groups, move them together, and place compatible dimensions on a chosen side with shared alignment or cascade spacing.
+- Find dimensions by value, tolerance, note, view or type. Use directional box selection, contextual actions and command search for larger drawing sets.
 - Show a paper grid and snap annotation placement to a configurable step; grid preferences are remembered independently of drawing data.
 - Set paper size A4, A3, A2 or A1, orientation, scale, decimal precision, hidden edges and centre lines.
 - Choose GOST 2.104-68 Form 1 templates with English or Ukrainian frame labels, plus ISO-style or minimal sheets. The interface stays in English.
@@ -34,25 +35,38 @@ Automatic dimensions are geometric suggestions. The app does not import semantic
 4. Review automatic dimensions. Choose a dimension icon in the floating drawing dock; its tooltip shows the tool name and shortcut. Pick a straight edge, circular edge, or snap points as appropriate, then move the draft preview and click to place it. Select an existing dimension to edit it, or drag its label or line to reposition it.
 5. Export PDF. Use **Save project** to retain editable dimensions, sheet settings and view layout.
 
-| Control                                                | Action                                                        |
-| ------------------------------------------------------ | ------------------------------------------------------------- |
-| Horizontal, Vertical, Aligned, Diameter, Radius, Angle | Start a dimension with the chosen measurement tool            |
-| `H` / `V` / `L` / `D` / `R` / `A`                      | Horizontal / Vertical / Aligned / Diameter / Radius / Angle   |
-| Mouse wheel                                            | Zoom around the cursor, from 25% to 1600% of the fitted sheet |
-| Space + drag, middle mouse drag, or hand tool          | Pan the sheet                                                 |
-| Drag empty space with the selection tool               | Pan the sheet                                                 |
-| Shift / Ctrl-click dimensions, or dimension checkboxes | Add or remove dimensions from a selection group               |
-| `G` / `S`                                              | Toggle the paper grid / grid snapping                         |
-| Alt while placing or dragging                          | Temporarily bypass grid snapping                              |
-| `0` or **Fit sheet**                                   | Show the whole sheet and reset panning                        |
-| `+` / `-` or the zoom controls                         | Zoom around the viewport centre                               |
-| `Esc`                                                  | Cancel a draft or gesture and return to selection             |
-| `Delete` / `Backspace`                                 | Remove the selected dimension                                 |
-| `Ctrl` / `⌘` + `Z`, with `Shift` to redo               | Undo or redo dimension and layout changes                     |
+| Control                                                | Action                                                         |
+| ------------------------------------------------------ | -------------------------------------------------------------- |
+| Horizontal, Vertical, Aligned, Diameter, Radius, Angle | Start a dimension with the chosen measurement tool             |
+| `H` / `V` / `L` / `D` / `R` / `A`                      | Horizontal / Vertical / Aligned / Diameter / Radius / Angle    |
+| Mouse wheel                                            | Zoom around the cursor, from 25% to 1600% of the fitted sheet  |
+| Space + drag, middle mouse drag, or hand tool          | Pan the sheet                                                  |
+| Drag empty space with the selection tool               | Pan the sheet                                                  |
+| Shift / Ctrl-click dimensions, or dimension checkboxes | Add or remove dimensions from a selection group                |
+| `B`, then drag left to right / right to left           | Select fully enclosed / intersected dimensions                 |
+| `F`                                                    | Fit the selected dimensions in the viewport                    |
+| `Shift` + `F`                                          | Show or hide the side panels                                   |
+| `P`                                                    | Activate the hand tool                                         |
+| `G` / `S`                                              | Toggle the paper grid / grid snapping                          |
+| Alt while placing or dragging                          | Temporarily bypass grid snapping                               |
+| `0` or **Fit sheet**                                   | Show the whole sheet and reset panning                         |
+| `+` / `-` or the zoom controls                         | Zoom around the viewport centre                                |
+| `Esc`                                                  | Cancel the current action, clear selection or leave focus mode |
+| `Delete` / `Backspace`                                 | Remove selected dimensions in one undoable edit                |
+| `Ctrl` / `⌘` + `A`                                     | Select all dimensions in the active part                       |
+| `Ctrl` / `⌘` + `K`                                     | Search available commands and shortcuts                        |
+| `Ctrl` / `⌘` + `S`                                     | Save the editable drawing project                              |
+| `Ctrl` / `⌘` + `Z`, with `Shift` to redo               | Undo or redo dimension and layout changes                      |
 
 Zoom changes the on-screen view only. **Drawing scale** controls the printed size. Adding, dragging, deleting or editing a dimension keeps the part views fixed; **Auto dimensions**, **Arrange**, or a change to paper format, orientation, template or drawing scale can lay out the sheet again. Undo restores both the previous dimensions and their view layout.
 
 The drawing dock keeps selection, panning and dimension tools together over the workspace. Separate compact docks contain the grid and zoom controls.
+
+The Dimensions panel follows the selection: one dimension opens its editing controls, a group exposes arrangement tools, and no selection shows the dimension browser. Search by nominal value, tolerance or note, and combine view/type filters. Filters change the list only; selected dimensions stay selected, including any hidden by filters. The panel reports their count, and **Show all** restores the full list.
+
+In **Box select** (`B`), drag left to right to enclose complete annotations, including their extension lines. Drag right to left to select intersected annotations. Hold Shift, Ctrl or ⌘ to add the box results to the current group. After selection, the normal Select tool resumes so the group can be dragged immediately. Right-click a dimension or empty sheet space for contextual commands; the floating selection bar provides Edit, Focus and Delete. **Focus** (`F`) changes only viewport zoom. **Focus drawing** (`Shift+F`) hides the side panels; opening a properties panel shows them again.
+
+**Commands** (`Ctrl/⌘+K`) searches tools and actions, shows their shortcuts, and explains why an unavailable action is disabled. Arrow keys navigate, Enter runs the chosen available command, and Esc closes the search. These CAD interaction patterns are informed by [Autodesk selection filters](https://help.autodesk.com/cloudhelp/ENU/Fusion-Model/files/SLD-SELECTION-FILTERS.htm) and [selection-dependent properties](https://help.autodesk.com/cloudhelp/2025/ENG/AutoCAD-Core/files/GUID-DC3674C5-A4C7-4CF6-9148-9B124DF29B78.htm).
 
 **Refresh automatic suggestions** updates geometric suggestions while retaining manual dimensions and explicit specifications. **Auto layout** repositions the existing views and annotation labels. Auto drawing scale selects a fitting scale from the GOST 2.302-68 part-drawing series, including 1:2.5, 1:4, 2.5:1 and 4:1. The isometric view can use a separate column when that improves the fit. Warnings above the workspace remain available while editing; use their layout or page-setup actions to address space problems and review the result.
 
@@ -66,7 +80,7 @@ Expand **Position and notes** in the selected-dimension panel to set its paper o
 
 Unapplied tolerance entries are retained per dimension while you zoom, pan, change inspector tabs or theme, select parts for export, or edit another dimension and return. Switching tolerance modes preserves values already entered in the other modes. Drafts are kept for the current session; Apply commits them to the drawing and saved project.
 
-Tool shortcuts work when focus is outside text fields. Use the arrow keys or Home/End to move between tolerance modes, then enter the required values and apply them.
+Tool, selection, Delete and drawing Undo shortcuts leave native text editing unchanged while an input, text area or editable field has focus. Save project and command search remain available with Ctrl/⌘+S and Ctrl/⌘+K. Use the arrow keys or Home/End to move between tolerance modes, then enter the required values and apply them.
 
 The title-block cache contains document fields and the selected template. **Save project** retains part geometry, dimensions and drawing layouts; keep the original STEP files separately. Browser storage must be available for automatic reuse across reloads.
 

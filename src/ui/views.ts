@@ -6,7 +6,7 @@ import { escapeHtml as e } from './utils';
 import { renderTitleBlockEditor } from './title-block-editor';
 import { renderDimensionEditor } from './dimension-editor';
 import { STANDARD_DRAWING_SCALES } from '../drawing/page-layout';
-import { formatDimensionLabel } from '../drawing/dimension-label';
+import { renderDimensionBrowser, type DimensionFilter } from './dimension-browser';
 import {
   renderDimensionPlacementEditor,
   type PlacementControls,
@@ -17,6 +17,7 @@ interface ViewContext {
   inspectorTab: string;
   selectedDimension?: string;
   selectedDimensionIds: ReadonlySet<string>;
+  dimensionFilter: DimensionFilter;
   placement: PlacementControls;
   autoDetail: 'balanced' | 'full';
   collapsedBranches: Set<string>;
@@ -27,6 +28,7 @@ export function createWorkspaceViews({
   inspectorTab,
   selectedDimension,
   selectedDimensionIds,
+  dimensionFilter,
   placement,
   autoDetail,
   collapsedBranches,
@@ -84,15 +86,23 @@ export function createWorkspaceViews({
       return `<div class="section-label">PAGE SETUP</div><div class="field-row"><label class="field"><span>Format</span><select data-setting="format">${['A4', 'A3', 'A2', 'A1'].map((x) => option(x, x, s.format)).join('')}</select></label><label class="field"><span>Orientation</span><select data-setting="orientation">${s.format === 'A4' && (s.template === 'eskd' || s.template === 'eskd-uk') ? '<option value="landscape" disabled>Landscape (use ISO or Minimal)</option>' : option('landscape', 'Landscape', s.orientation)}${option('portrait', 'Portrait', s.orientation)}</select></label></div><label class="field"><span>Drawing template</span><select data-setting="template">${option('eskd', 'ESKD · GOST 2.104-68 · English', s.template)}${option('eskd-uk', 'ESKD · GOST 2.104-68 · Ukrainian', s.template)}${option('iso', 'ISO style', s.template)}${option('minimal', 'Minimal', s.template)}</select></label><p class="field-help">First-angle projection. ESKD templates use Form 1 (185 × 55 mm) with 20 mm left and 5 mm other frame margins. Use A4 portrait for the standard A4 arrangement. Drawing scale controls printed size; Zoom inspects details.</p><div class="field-row"><label class="field"><span>Drawing scale</span><select data-setting="scale">${option('auto', 'Auto fit', s.scale)}${scales.map((x) => option(x, x >= 1 ? `${x}:1` : `1:${+(1 / x).toFixed(3)}`, s.scale)).join('')}</select></label><label class="field"><span>Decimal places</span><select data-setting="precision">${[0, 1, 2, 3, 4, 5, 6].map((x) => option(x, String(x), s.precision)).join('')}</select></label></div><div class="inspector-rule"></div><div class="section-label">DISPLAY</div><label class="switch-row"><span>Hidden edges</span><input type="checkbox" data-setting="hiddenLines" ${s.hiddenLines ? 'checked' : ''}/></label><label class="switch-row"><span>Center lines</span><input type="checkbox" data-setting="centerLines" ${s.centerLines ? 'checked' : ''}/></label><label class="field"><span>Automatic dimension detail</span><select id="auto-detail">${option('balanced', 'Balanced', autoDetail)}${option('full', 'All baseline coordinates', autoDetail)}</select></label><p class="field-help">Refreshes automatic suggestions while keeping manual dimensions and specifications. Undo restores the previous set.</p><div class="inspector-rule"></div><div class="section-label">CURRENT SHEET</div><div id="sheet-stats" class="sheet-stats">${part ? 'Generating layout…' : 'Import a part to create a sheet.'}</div><p class="field-help">One selected part per PDF page. Use the checkboxes in the parts list to create a drawing set.</p>`;
     if (inspectorTab === 'details')
       return `${renderTitleBlockEditor(s, part?.name)}${part?.warnings.length ? `<div class="geometry-note"><strong>Import notes</strong>${part.warnings.map((w) => `<p>${e(w)}</p>`).join('')}</div>` : ''}`;
+    const selectedCount = dims().filter((item) => selectedDimensionIds.has(item.id)).length;
     const editor = dimension ? renderDimensionEditor(dimension, s.precision) : '';
-    return `<div class="dimension-heading"><span class="section-label">DIMENSIONS <b>${dims().length}</b></span></div>${renderDimensionPlacementEditor(dims(), selectedDimensionIds, placement)}${selectedDimensionIds.size === 1 ? editor : ''}<div id="dimension-layout-warning" aria-live="polite"></div><p class="field-help dimension-selection-help">Use checkboxes or Shift / Ctrl-click to select a group. Drag a selected dimension to move the group.</p><div class="dimension-list">${dims()
-      .map(
-        (d) =>
-          `<div class="dimension-list-item ${selectedDimensionIds.has(d.id) ? 'selected' : ''}"><input type="checkbox" data-dimension-check="${e(d.id)}" aria-label="Select ${e(formatDimensionLabel(d, s.precision).plainText)} ${d.viewId} ${d.kind}" ${selectedDimensionIds.has(d.id) ? 'checked' : ''}/><button class="dimension-row ${d.id === selectedDimension ? 'active' : ''}" data-dimension-select="${e(d.id)}" aria-pressed="${selectedDimensionIds.has(d.id)}"><span>${e(formatDimensionLabel(d, s.precision).plainText)}<small>${d.viewId} · ${d.kind}</small></span><span class="dimension-origin" title="${d.automatic ? 'Automatic suggestion' : 'Manual dimension'}">${d.automatic ? 'A' : 'M'}</span></button></div>`,
-      )
-      .join(
-        '',
-      )}</div>${selectedDimensionIds.size > 1 && editor ? `<details class="focused-dimension-editor"><summary>Edit focused dimension</summary>${editor}</details>` : ''}<div class="inspector-rule"></div><div class="section-label">ADD A DIMENSION</div><p class="field-help">Click Horizontal, Vertical, Aligned, Diameter, Radius or Angle above the sheet. Pick a straight edge or two snap points in the same orthographic view, then move the preview and click to place it. For a radius or diameter, click a circular edge. For an angle, click two straight edges.</p>`;
+    const arrangement = renderDimensionPlacementEditor(dims(), selectedDimensionIds, placement);
+    const browser = renderDimensionBrowser(
+      dims(),
+      selectedDimensionIds,
+      selectedDimension,
+      dimensionFilter,
+      s.precision,
+    );
+    const warning = '<div id="dimension-layout-warning" aria-live="polite"></div>';
+    const help =
+      '<details class="dimension-tool-help"><summary>Dimension tools</summary><p class="field-help">Choose Horizontal, Vertical, Aligned, Diameter, Radius or Angle in the drawing dock. Pick an edge or snap points, move the preview and click to place. Radius and diameter use circular edges; angles use two straight edges.</p></details>';
+    if (!selectedCount)
+      return `<p class="dimension-selection-tip">Select a dimension on the sheet to edit it, or use the list below. Checkboxes and Shift / Ctrl-click build a group.</p>${warning}${browser}${arrangement}${help}`;
+    if (selectedCount === 1) return `${editor}${arrangement}${warning}${browser}${help}`;
+    return `<div class="dimension-selection-summary"><div><strong>${selectedCount} dimensions selected</strong><p class="field-help">Drag a selected dimension to move the group, or arrange it by side.</p></div>${button('clear-dimension-selection', 'Clear', undefined, 'text-button', 'aria-label="Clear dimension selection"')}</div>${arrangement}${warning}${browser}${editor ? `<details class="focused-dimension-editor"><summary>Edit focused dimension</summary>${editor}</details>` : ''}${help}`;
   }
 
   function renderHelp(): string {

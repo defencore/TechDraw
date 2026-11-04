@@ -16,6 +16,8 @@ import { pickDimension } from './dimension-picking';
 import { nearestPointOnEdge, pickGeometry, type GeometryPick } from './geometry-picking';
 import { drawingPage } from '../drawing/page-layout';
 import { dimensionGeometry } from '../drawing/dimension-geometry';
+import { marqueeRegion, selectMarquee } from './marquee-selection';
+import { DimensionSelection } from './dimension-selection';
 import {
   defaultGridSettings,
   renderWorkspaceGrid,
@@ -26,6 +28,7 @@ import {
 } from './drawing-grid';
 import {
   fitViewport,
+  clampViewportZoom,
   getViewportTransform,
   panViewport,
   resizeViewport,
@@ -35,7 +38,7 @@ import {
   type ViewportState,
 } from './viewport';
 
-export type CanvasTool = 'select' | 'pan' | DimensionKind;
+export type CanvasTool = 'select' | 'box-select' | 'pan' | DimensionKind;
 export interface CanvasDocument {
   part: Part;
   dimensions: Dimension[];
@@ -46,6 +49,8 @@ export interface CanvasDocument {
 }
 interface CanvasCallbacks {
   select(id?: string, additive?: boolean): void;
+  selectMany(ids: string[], additive: boolean): void;
+  contextMenu(position: { clientX: number; clientY: number; dimensionId?: string }): void;
   add(dimension: Dimension): void;
   edit(dimension: Dimension): void;
   editMany(dimensions: Dimension[]): void;
@@ -64,6 +69,7 @@ interface PointerGesture {
   previews?: Dimension[];
   viewport?: ViewportState;
   click?: boolean;
+  marquee?: { endSheet: Point2; endClient: Point2; additive: boolean };
 }
 
 /** Owns only screen interaction. Model measurements and paper layout never depend on zoom. */
@@ -114,9 +120,7 @@ export class DrawingCanvas {
         this.setZoom(this.viewport.zoom * 2, this.local(event));
       }
     });
-    element.addEventListener('contextmenu', (event) => {
-      if (this.space || this.tool === 'pan') event.preventDefault();
-    });
+    element.addEventListener('contextmenu', this.contextMenu);
     this.resize.observe(element);
   }
 
@@ -180,8 +184,9 @@ export class DrawingCanvas {
   setTool(tool: CanvasTool): void {
     if (this.tool !== tool) this.cancel();
     this.tool = tool;
-    this.element?.classList.toggle('measuring', !['select', 'pan'].includes(tool));
+    this.element?.classList.toggle('measuring', !['select', 'box-select', 'pan'].includes(tool));
     this.element?.classList.toggle('pan-tool', tool === 'pan');
+    this.element?.classList.toggle('box-select-tool', tool === 'box-select');
     this.hint();
   }
   setPanKey(value: boolean): void {
@@ -200,16 +205,61 @@ export class DrawingCanvas {
       : undefined;
   }
   fit(): void {
-    if (this.gesture?.dimension || this.pinch) return;
+    if (this.gesture?.dimension || this.gesture?.marquee || this.pinch) return;
     this.viewport = fitViewport();
     this.applyViewport(false);
     this.rebasePan();
+  }
+  fitSelection(): boolean {
+    if (
+      !this.document ||
+      !this.sheet ||
+      !this.metrics ||
+      this.gesture?.dimension ||
+      this.gesture?.marquee ||
+      this.pinch
+    )
+      return false;
+    const selected = this.selectedIds();
+    const geometries = this.document.dimensions
+      .filter((dimension) => selected.has(dimension.id))
+      .map((dimension) =>
+        dimensionGeometry(
+          dimension,
+          this.sheet!.viewTransforms[dimension.viewId],
+          this.document!.settings.precision,
+        ),
+      );
+    if (!geometries.length) return false;
+    const bounds = {
+      minX: Math.min(...geometries.map(({ bounds }) => bounds.minX)),
+      maxX: Math.max(...geometries.map(({ bounds }) => bounds.maxX)),
+      minY: Math.min(...geometries.map(({ bounds }) => bounds.minY)),
+      maxY: Math.max(...geometries.map(({ bounds }) => bounds.maxY)),
+    };
+    const baseScale = getViewportTransform(fitViewport(), this.metrics).scale;
+    const pixelsPerMillimetre = Math.min(
+      Math.max(1, this.metrics.width - 80) / Math.max(1, bounds.maxX - bounds.minX),
+      Math.max(1, this.metrics.height - 80) / Math.max(1, bounds.maxY - bounds.minY),
+    );
+    const zoom = clampViewportZoom(pixelsPerMillimetre / baseScale);
+    const centered = getViewportTransform({ zoom, pan: [0, 0] }, this.metrics);
+    this.viewport = {
+      zoom,
+      pan: [
+        this.metrics.width / 2 - centered.x - ((bounds.minX + bounds.maxX) / 2) * centered.scale,
+        this.metrics.height / 2 - centered.y - ((bounds.minY + bounds.maxY) / 2) * centered.scale,
+      ],
+    };
+    this.applyViewport(false);
+    this.rebasePan();
+    return true;
   }
   zoomBy(factor: number): void {
     this.setZoom(this.viewport.zoom * factor);
   }
   setZoom(value: number, anchor?: Point2): void {
-    if (!this.metrics || this.gesture?.dimension || this.pinch) return;
+    if (!this.metrics || this.gesture?.dimension || this.gesture?.marquee || this.pinch) return;
     this.viewport = zoomAt(
       this.viewport,
       this.metrics,
@@ -236,6 +286,7 @@ export class DrawingCanvas {
     this.hovered = undefined;
     this.highlightDimension();
     this.restoreGesture(gesture);
+    this.marqueeFeedback();
     if (gesture && this.element?.hasPointerCapture(gesture.pointerId))
       this.element.releasePointerCapture(gesture.pointerId);
     this.element?.classList.remove('panning', 'dimension-dragging');
@@ -258,7 +309,7 @@ export class DrawingCanvas {
       (this.metrics.width !== metrics.width || this.metrics.height !== metrics.height),
     );
     if (resized && this.metrics) {
-      if (this.gesture?.dimension || this.pinch) this.cancel();
+      if (this.gesture?.dimension || this.gesture?.marquee || this.pinch) this.cancel();
       this.viewport = resizeViewport(this.viewport, this.metrics, metrics);
     }
     this.metrics = metrics;
@@ -337,6 +388,8 @@ export class DrawingCanvas {
       if (this.touches.size === 2) {
         this.restoreGesture(this.gesture);
         this.gesture = undefined;
+        this.marqueeFeedback();
+        this.element.classList.remove('dimension-dragging');
         const [a, b] = [...this.touches.values()];
         this.pinch = {
           distance: Math.max(1, Math.hypot(b[0] - a[0], b[1] - a[1])),
@@ -356,40 +409,23 @@ export class DrawingCanvas {
     let selected = this.selectedIds();
     if (dimension) {
       const additive = event.ctrlKey || event.metaKey || event.shiftKey;
-      if (additive && selected.has(dimension.id)) {
-        selected.delete(dimension.id);
-        this.document = {
-          ...this.document,
-          selectedDimensionIds: [...selected],
-          selectedDimension:
-            this.document.selectedDimension === dimension.id
-              ? [...selected].at(-1)
-              : this.document.selectedDimension,
-        };
-        this.callbacks.select(dimension.id, true);
-        this.patchSelections();
+      if (!this.selectDimension(dimension.id, additive)) {
         event.preventDefault();
         return;
       }
-      if (additive) selected.add(dimension.id);
-      else if (!selected.has(dimension.id)) selected = new Set([dimension.id]);
-      this.document = {
-        ...this.document,
-        selectedDimension: dimension.id,
-        selectedDimensionIds: [...selected],
-      };
-      this.callbacks.select(dimension.id, additive);
-      this.patchSelections();
+      selected = this.selectedIds();
     }
     const pan =
       this.space ||
       this.tool === 'pan' ||
       event.button === 1 ||
       (this.tool === 'select' && !dimension);
+    const box = this.tool === 'box-select' && !pan;
+    const sheetPoint = this.sheetPoint(event);
     this.gesture = {
       pointerId: event.pointerId,
       startClient: [event.clientX, event.clientY],
-      startSheet: this.sheetPoint(event),
+      startSheet: sheetPoint,
       moved: false,
       ...(dimension
         ? {
@@ -398,9 +434,17 @@ export class DrawingCanvas {
               this.document.dimensions.filter((item) => selected.has(item.id)),
             ),
           }
-        : pan
-          ? { viewport: structuredClone(this.viewport) }
-          : { click: true }),
+        : box
+          ? {
+              marquee: {
+                endSheet: sheetPoint,
+                endClient: [event.clientX, event.clientY],
+                additive: event.ctrlKey || event.metaKey || event.shiftKey,
+              },
+            }
+          : pan
+            ? { viewport: structuredClone(this.viewport) }
+            : { click: true }),
     };
     this.element.setPointerCapture(event.pointerId);
     event.preventDefault();
@@ -439,6 +483,10 @@ export class DrawingCanvas {
       if (gesture.viewport) {
         this.viewport = panViewport(gesture.viewport, [dx, dy]);
         this.applyViewport(false);
+      } else if (gesture.marquee) {
+        gesture.marquee.endSheet = this.sheetPoint(event);
+        gesture.marquee.endClient = [event.clientX, event.clientY];
+        this.marqueeFeedback();
       } else if (gesture.dimension && this.sheet) {
         this.previewDrag(gesture, event);
       }
@@ -449,7 +497,7 @@ export class DrawingCanvas {
       this.scheduleFeedback();
       return;
     }
-    if (!['select', 'pan'].includes(this.tool)) {
+    if (!['select', 'box-select', 'pan'].includes(this.tool)) {
       this.hovered = this.geometryAt(event);
       this.scheduleFeedback();
     } else if (this.tool === 'select') this.highlightDimension(this.dimensionAt(event));
@@ -484,7 +532,34 @@ export class DrawingCanvas {
     if (this.element?.hasPointerCapture(event.pointerId))
       this.element.releasePointerCapture(event.pointerId);
     this.element?.classList.remove('panning', 'dimension-dragging');
-    if (gesture.dimension && gesture.moved && gesture.preview) {
+    this.marqueeFeedback();
+    if (gesture.marquee && gesture.moved && this.document && this.sheet) {
+      const ids = selectMarquee(
+        this.document.dimensions.map((dimension) => ({
+          id: dimension.id,
+          geometry: dimensionGeometry(
+            dimension,
+            this.sheet!.viewTransforms[dimension.viewId],
+            this.document!.settings.precision,
+          ),
+        })),
+        gesture.startSheet,
+        this.sheetPoint(event),
+      );
+      const selected = gesture.marquee.additive ? this.selectedIds() : new Set<string>();
+      for (const id of ids) selected.add(id);
+      this.document = {
+        ...this.document,
+        selectedDimensionIds: [...selected],
+        selectedDimension:
+          ids.at(-1) ??
+          (selected.has(this.document.selectedDimension ?? '')
+            ? this.document.selectedDimension
+            : [...selected].at(-1)),
+      };
+      this.callbacks.selectMany(ids, gesture.marquee.additive);
+      this.patchSelections();
+    } else if (gesture.dimension && gesture.moved && gesture.preview) {
       this.previewDrag(gesture, event);
       const previews = gesture.previews ?? [gesture.preview];
       if (previews.every((dimension) => this.dimensionFits(dimension))) {
@@ -521,11 +596,13 @@ export class DrawingCanvas {
     this.restoreGesture(this.gesture);
     this.gesture = undefined;
     this.pinch = undefined;
+    this.marqueeFeedback();
     this.element?.classList.remove('panning', 'dimension-dragging');
   };
   private wheel = (event: WheelEvent): void => {
-    if (!this.enabled || !this.document || !this.metrics || this.gesture?.dimension) return;
+    if (!this.enabled || !this.document || !this.metrics) return;
     event.preventDefault();
+    if (this.gesture?.dimension || this.gesture?.marquee) return;
     const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? this.metrics.height : 1;
     if (event.shiftKey && !event.ctrlKey) {
       this.viewport = panViewport(this.viewport, [-(event.deltaX || event.deltaY) * unit, 0]);
@@ -536,6 +613,16 @@ export class DrawingCanvas {
         this.viewport.zoom * Math.exp(-event.deltaY * unit * (event.ctrlKey ? 0.008 : 0.0015)),
         this.local(event),
       );
+  };
+
+  private contextMenu = (event: MouseEvent): void => {
+    if (!this.enabled || !this.document) return;
+    event.preventDefault();
+    if (this.space || this.tool === 'pan' || this.gesture || this.pinch) return;
+    const id = this.dimensionAt(event);
+    if (id && this.document.dimensions.some((dimension) => dimension.id === id))
+      this.selectDimension(id);
+    this.callbacks.contextMenu({ clientX: event.clientX, clientY: event.clientY, dimensionId: id });
   };
 
   private chooseGeometry(event: PointerEvent): void {
@@ -682,6 +769,48 @@ export class DrawingCanvas {
         (this.document?.selectedDimension ? [this.document.selectedDimension] : []),
     );
   }
+  private selectDimension(id: string, additive = false): boolean {
+    if (!this.document) return false;
+    const selection = new DimensionSelection();
+    selection.replace(this.selectedIds(), this.document.selectedDimension);
+    selection.select(id, additive);
+    this.document = {
+      ...this.document,
+      selectedDimension: selection.focus,
+      selectedDimensionIds: [...selection.ids],
+    };
+    this.callbacks.select(id, additive);
+    this.patchSelections();
+    return selection.ids.has(id);
+  }
+
+  private marqueeFeedback(): void {
+    if (!this.element) return;
+    let overlay = this.element.querySelector<SVGSVGElement>('[data-canvas-marquee]');
+    const gesture = this.gesture;
+    if (!gesture?.marquee || !gesture.moved) {
+      overlay?.remove();
+      return;
+    }
+    if (!overlay) {
+      overlay = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      overlay.dataset.canvasMarquee = '';
+      overlay.setAttribute('aria-hidden', 'true');
+      overlay.setAttribute(
+        'style',
+        'position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:4',
+      );
+      this.element.append(overlay);
+    }
+    const rect = this.element.getBoundingClientRect();
+    const { bounds, crossing } = marqueeRegion(
+      [gesture.startClient[0] - rect.left, gesture.startClient[1] - rect.top],
+      [gesture.marquee.endClient[0] - rect.left, gesture.marquee.endClient[1] - rect.top],
+    );
+    const color = crossing ? '#16745e' : '#2860b3';
+    overlay.setAttribute('viewBox', `0 0 ${this.element.clientWidth} ${this.element.clientHeight}`);
+    overlay.innerHTML = `<rect x="${bounds.minX}" y="${bounds.minY}" width="${bounds.maxX - bounds.minX}" height="${bounds.maxY - bounds.minY}" fill="${color}" fill-opacity=".09" stroke="${color}" stroke-width="1.2"${crossing ? ' stroke-dasharray="6 4"' : ''}/>`;
+  }
 
   private patchDimension(dimension: Dimension): void {
     if (!this.document || !this.sheet) return;
@@ -771,19 +900,24 @@ export class DrawingCanvas {
       ? 'Click to place the dimension · Esc to cancel · Wheel to zoom'
       : this.tool === 'pan'
         ? 'Drag to pan · Wheel to zoom under the cursor · Fit to show the sheet'
-        : this.tool === 'select'
-          ? 'Drag dimensions to move them · Shift / Ctrl-click to select a group · Wheel to zoom · Space + drag to pan'
-          : this.tool === 'angle'
-            ? this.pendingEdge
-              ? 'Choose the second straight edge in the same view'
-              : 'Choose two straight edges, then click to place the angle'
-            : this.tool === 'diameter' || this.tool === 'radius'
-              ? 'Choose a circular edge, then click to place the dimension'
-              : this.pendingPoint
-                ? 'Choose the second snap point in the same view'
-                : 'Choose a straight edge or two snap points, then click to place the dimension';
+        : this.tool === 'box-select'
+          ? 'Drag right to contain dimensions · Drag left to cross dimensions · Shift / Ctrl adds to selection'
+          : this.tool === 'select'
+            ? 'Drag dimensions to move them · Shift / Ctrl-click to select a group · Wheel to zoom · Space + drag to pan'
+            : this.tool === 'angle'
+              ? this.pendingEdge
+                ? 'Choose the second straight edge in the same view'
+                : 'Choose two straight edges, then click to place the angle'
+              : this.tool === 'diameter' || this.tool === 'radius'
+                ? 'Choose a circular edge, then click to place the dimension'
+                : this.pendingPoint
+                  ? 'Choose the second snap point in the same view'
+                  : 'Choose a straight edge or two snap points, then click to place the dimension';
     this.callbacks.hint(
-      message + (this.grid.snap && this.tool !== 'pan' ? ' · Alt to bypass grid' : ''),
+      message +
+        (this.grid.snap && this.tool !== 'pan' && this.tool !== 'box-select'
+          ? ' · Alt to bypass grid'
+          : ''),
     );
   }
 }

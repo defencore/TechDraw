@@ -1,4 +1,8 @@
 const paths: Record<string, string> = {
+  search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/>',
+  boxSelect: '<path d="M9 4H4v5m11-5h5v5M4 15v5h5m11-5v5h-5M4 12h1m7-8v1m7 7h1m-8 7v1"/>',
+  expand: '<path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5M3 3l6 6m12-6-6 6M3 21l6-6m12 6-6-6"/>',
+  panels: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M8 4v16M16 4v16"/>',
   grid: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M15 3v18M3 9h18M3 15h18"/>',
   magnet: '<path d="M5 3v9a7 7 0 0 0 14 0V3h-5v9a2 2 0 0 1-4 0V3H5ZM5 7h5m4 0h5"/>',
   sideLeft: '<path d="M4 3v18M20 7H9m4-4L9 7l4 4M20 17H9m4-4-4 4 4 4"/>',

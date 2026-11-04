@@ -1523,18 +1523,6 @@ h1 {
   border-radius: 9px;
   background: var(--surface-subtle);
 }
-.placement-heading {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 12px;
-}
-.selection-count {
-  color: var(--accent);
-  font-size: 10px;
-  white-space: nowrap;
-}
 .selection-tools {
   display: flex;
   align-items: flex-end;
