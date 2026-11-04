@@ -42,8 +42,7 @@ export function createAnnotation(
   options: AnnotationOptions,
 ): DrawingAnnotation {
   const validated = validateAnnotationOptions(options);
-  if (tool === 'text' && !options.text.trim())
-    throw new Error('Enter the annotation text in the annotation panel, then click to place it.');
+  if (tool === 'text' && !options.text.trim()) throw new Error('Annotation text cannot be empty.');
   return {
     id: crypto.randomUUID(),
     kind: tool,

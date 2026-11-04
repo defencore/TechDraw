@@ -2,10 +2,12 @@ import './style.css';
 import './ui/workspace-cad.css';
 import './ui/drawing-share.css';
 import './ui/viewer.css';
+import './ui/text-annotation-editor.css';
 import { createCadClient } from './cad/client';
 import { refreshDimensionSuggestions } from './drawing/suggestions';
 import { renderDrawingFeedback } from './ui/drawing-feedback';
 import { ToleranceEditorController } from './ui/tolerance-controller';
+import { TextAnnotationEditorController } from './ui/text-annotation-controller';
 import { DimensionSelection } from './ui/dimension-selection';
 import type { GridSettings } from './ui/drawing-grid';
 import { isGridSpacing } from './drawing/grid-coordinates';
@@ -34,7 +36,7 @@ import {
 import { renderDrawing } from './drawing/render';
 import { DrawingCanvas, type CanvasTool } from './ui/drawing-canvas';
 import { parseProject, parsePartInstructions } from './project';
-import type { Dimension, DrawingSettings } from './model';
+import type { Dimension, DrawingSettings, Point2 } from './model';
 import { defaultSettings, type WorkspaceState } from './state';
 import { WorkspaceDocument } from './workspace-document';
 import { errorMessage } from './ui/error-message';
@@ -197,6 +199,9 @@ const drawingCanvas = new DrawingCanvas({
   editAnnotation(annotation) {
     changeAnnotations(annotations().map((item) => (item.id === annotation.id ? annotation : item)));
   },
+  textAnnotation(request) {
+    openTextNote(request.annotationId, request.point, [request.clientX, request.clientY]);
+  },
   select(id, additive = false) {
     selectedAnnotation = undefined;
     dimensionSelection.select(id, additive);
@@ -296,6 +301,70 @@ const drawingCanvas = new DrawingCanvas({
   },
   error: toast,
 });
+const textNoteEditor = new TextAnnotationEditorController({
+  commit(session, annotation) {
+    if (state.activeId !== session.partId || busy || viewerMode)
+      throw new Error('The drawing changed. Close this editor and select the note again.');
+    const current = session.annotation
+      ? annotations().find((item) => item.id === session.annotation!.id)
+      : undefined;
+    if (
+      session.annotation &&
+      (!current || JSON.stringify(current) !== JSON.stringify(session.annotation))
+    )
+      throw new Error('The drawing changed. Close this editor and select the note again.');
+    if (current?.locked) throw new Error('Unlock the note before editing it.');
+    if (!drawingCanvas.canPlaceAnnotation(annotation))
+      throw new Error(
+        'This note does not fit at this position. Shorten it or reduce the text size.',
+      );
+    workspaceDocument.changeAnnotations(
+      current
+        ? annotations().map((item) => (item.id === current.id ? annotation : item))
+        : [...annotations(), annotation],
+    );
+    annotationOptions.color = annotation.color!;
+    annotationOptions.fontSize = annotation.fontSize!;
+    annotationOptions.text = '';
+    selectedAnnotation = annotation.id;
+    tool = 'select';
+    render();
+    toast(session.annotation ? 'Note updated.' : 'Note added. Drag to move; click to edit.');
+  },
+  cancel() {
+    tool = 'select';
+    render();
+  },
+  closed() {
+    drawingCanvas.setEnabled(!busy && !helpOpen && !textNoteEditor.isOpen);
+    app.querySelector<HTMLElement>('#canvas-area')?.focus({ preventScroll: true });
+  },
+});
+
+function openTextNote(id?: string, point?: Point2, client?: Point2): void {
+  if (!state.activeId || busy || viewerMode || textNoteEditor.isOpen) return;
+  const annotation = id ? annotations().find((item) => item.id === id) : undefined;
+  if (id && (!annotation || annotation.kind !== 'text')) return;
+  if (annotation?.locked) {
+    toast('Unlock the note before editing it.');
+    return;
+  }
+  const anchor = annotation?.points[0] ?? point;
+  if (!anchor) return;
+  selectedAnnotation = annotation?.id;
+  dimensionSelection.clear();
+  workspaceMode = 'annotations';
+  inspectorTab = 'annotations';
+  drawingCanvas.cancel();
+  textNoteEditor.open({
+    partId: state.activeId,
+    point: anchor,
+    client,
+    annotation,
+    options: { ...annotationOptions, text: '' },
+  });
+  drawingCanvas.setEnabled(false);
+}
 const controlsResize = new ResizeObserver(() => {
   measureCanvasControls();
   drawingCanvas.refreshViewport();
@@ -321,7 +390,7 @@ const imageShare = new DrawingShareController({
 const captureRegion = new CaptureRegionController(
   (bounds) => {
     app.querySelector('.capture-cancel')?.remove();
-    drawingCanvas.setEnabled(!busy && !helpOpen);
+    drawingCanvas.setEnabled(!busy && !helpOpen && !textNoteEditor.isOpen);
     imageShare.open(screenAppearance(), bounds);
   },
   () => {
@@ -477,7 +546,7 @@ function renderViewerControls(): string {
 }
 function renderMarkupPanel(): string {
   const selected = annotations().find((item) => item.id === selectedAnnotation);
-  return `${renderMarkupGuide({ tool, enabled: !busy && Boolean(active()), selected: Boolean(selected) })}${renderAnnotationEditor(selected, annotationOptions, tool)}<div class="annotation-list"><div class="section-label">ANNOTATIONS · ${annotations().length}</div>${annotations()
+  return `${renderMarkupGuide({ tool, enabled: !busy && Boolean(active()), selected: Boolean(selected), selectedKind: selected?.kind })}${renderAnnotationEditor(selected, annotationOptions, tool)}<div class="annotation-list"><div class="section-label">ANNOTATIONS · ${annotations().length}</div>${annotations()
     .map(
       (item, index) =>
         `<button type="button" class="annotation-list-item ${item.id === selectedAnnotation ? 'active' : ''}" data-annotation-select="${e(item.id)}"><span>${e(item.kind)}</span><span data-user-content>${e(item.text?.split('\n')[0].slice(0, 45) || String(index + 1))}</span>${renderLockBadge(item.locked)}</button>`,
@@ -676,7 +745,7 @@ function render(): void {
   else if (!empty) canvas.insertAdjacentHTML('beforeend', views.renderEmpty());
   drawingCanvas.attach(canvas);
   captureRegion.attach(canvas);
-  drawingCanvas.setEnabled(!busy && !helpOpen);
+  drawingCanvas.setEnabled(!busy && !helpOpen && !textNoteEditor.isOpen);
   drawingCanvas.setReadOnly(viewerMode);
   drawingCanvas.setAnnotationOptions(annotationOptions);
   drawingCanvas.setTool(tool);
@@ -814,9 +883,12 @@ function setTool(value: CanvasTool): void {
     inspectorTab = 'annotations';
     workspaceMode = 'annotations';
     render();
-    if (value === 'text') app.querySelector<HTMLTextAreaElement>('#annotation-text')?.focus();
-    else if (matchMedia('(max-width: 960px)').matches)
+    if (matchMedia('(max-width: 960px)').matches)
       app.querySelector('#canvas-area')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    if (value === 'text') {
+      app.querySelector<HTMLElement>('#canvas-area')?.focus({ preventScroll: true });
+      toast('Click the drawing to choose where your note starts.');
+    }
     return;
   }
   if (dimensionTools.some((item) => item.id === value)) {
@@ -1445,6 +1517,10 @@ const commandHandlers: Record<CommandId, () => void> = {
     deleteDimensions(new Set(dimensionSelection.focus ? [dimensionSelection.focus] : [])),
   'edit-dimension': () => {
     if (selectedAnnotation) {
+      if (annotations().find((item) => item.id === selectedAnnotation)?.kind === 'text') {
+        openTextNote(selectedAnnotation);
+        return;
+      }
       openInspector('annotations');
       app
         .querySelector<HTMLElement>('.annotation-editor textarea,.annotation-editor input')
@@ -1537,6 +1613,7 @@ const commandHandlers: Record<CommandId, () => void> = {
   },
 };
 function runWorkspaceAction(action: string): void {
+  if (textNoteEditor.isOpen) return;
   if (captureRegion.active && action !== 'capture-region') captureRegion.cancel();
   if (action === 'language:en' || action === 'language:uk') {
     setLanguage(action === 'language:en' ? 'en' : 'uk', titleBlockStorage);
@@ -1644,22 +1721,8 @@ app.addEventListener('click', (event) => {
     runWorkspaceAction('toggle-selection-lock');
     return;
   }
-  if (annotationAction === 'place') {
-    try {
-      const options = readAnnotationOptions(app, annotationOptions);
-      if (!options.text.trim()) throw new Error('Annotation text cannot be empty.');
-      Object.assign(annotationOptions, options);
-      selectedAnnotation = undefined;
-      setTool('text');
-      drawingCanvas.setAnnotationOptions(annotationOptions);
-      const canvas = app.querySelector<HTMLElement>('#canvas-area');
-      if (matchMedia('(max-width: 960px)').matches)
-        canvas?.scrollIntoView({ block: 'start', behavior: 'smooth' });
-      canvas?.focus({ preventScroll: true });
-      toast('Click the sheet to place your note. Escape cancels placement.');
-    } catch (error) {
-      toast(errorMessage(error));
-    }
+  if (annotationAction === 'edit-text' && selectedAnnotation) {
+    openTextNote(selectedAnnotation);
     return;
   }
   if (annotationAction && selectedAnnotation) {
@@ -1688,7 +1751,10 @@ app.addEventListener('click', (event) => {
     dimensionSelection.clear();
     tool = 'select';
     inspectorTab = 'annotations';
+    workspaceMode = 'annotations';
     render();
+    if (annotations().find((item) => item.id === annotationId)?.kind === 'text')
+      openTextNote(annotationId);
     return;
   }
   if (toleranceEditor.handleClick(target)) return;
@@ -1913,7 +1979,8 @@ window.addEventListener('drop', (event) => {
   event.preventDefault();
   dragDepth = 0;
   document.querySelector('#canvas-area')?.classList.remove('dragover');
-  if (event.dataTransfer && !viewerMode) void importFiles([...event.dataTransfer.files]);
+  if (event.dataTransfer && !viewerMode && !textNoteEditor.isOpen)
+    void importFiles([...event.dataTransfer.files]);
 });
 window.addEventListener('keydown', (event) => {
   if (event.defaultPrevented || commandPalette.isOpen) return;

@@ -132,7 +132,9 @@ Complex assemblies are split into selectable placed solids. Reused products with
 
 ## Review, images and workshop viewing
 
-Open **Markup** and choose a tool from the visible tool cards. For a note, choose **Text**, enter the text and choose a color, then select **Place text** and click the paper. For Arrow, Rectangle, Ellipse or Freehand, choose a color and line width, then drag on the paper. Release to finish the graphic or stroke. Select an unlocked mark to move it or edit its paper position, size, text, line width and color; choose **Apply changes** to commit the editor values.
+Open **Markup** and choose a tool from the visible tool cards. For a note, choose **Text** and click the paper where the note belongs. Enter the text, color and text size in the dialog, then choose **Add note**. Click or tap existing unlocked text to reopen the same dialog and choose **Save changes** after editing. **Cancel** discards the dialog draft. Drag a note to move it; locked notes remain protected.
+
+For Arrow, Rectangle, Ellipse or Freehand, choose a color and line width, then drag on the paper. Release to finish the graphic or stroke. Select an unlocked graphic to move it or edit its paper position, size, line width and color; choose **Apply changes** to commit the editor values. Text dialog drafts do not change the drawing, history or exports until submitted.
 
 Freehand stays active for multiple mouse or pen strokes. Lift between strokes; choose **Finish drawing**, Select or `Esc` when finished. Each completed stroke remains independently editable and undoable. While a pen stroke is active, other pointer contacts such as a resting palm are ignored. Two-finger navigation remains available between strokes; freehand points are not forced onto the paper grid.
 

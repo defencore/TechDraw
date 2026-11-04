@@ -148,13 +148,35 @@ export const ukMessages: Record<string, string> = {
   'Review annotations': 'Позначки креслення',
   'EDIT ANNOTATION': 'РЕДАГУВАННЯ ПОЗНАЧКИ',
   'REVIEW ANNOTATIONS': 'ПОЗНАЧКИ КРЕСЛЕННЯ',
-  'Enter a note, then click the sheet to place it':
-    'Уведіть примітку та клацніть на аркуші для розміщення',
+  'Add text note': 'Додати текстову нотатку',
+  'Edit text note': 'Редагувати текстову нотатку',
+  'Text note': 'Текстова нотатка',
+  'Edit text': 'Редагувати текст',
+  'Type your note…': 'Введіть нотатку…',
+  'Text preview': 'Попередній вигляд тексту',
+  'Your note preview': 'Попередній вигляд вашої нотатки',
+  Preview: 'Попередній вигляд',
+  'Add note': 'Додати нотатку',
+  'Save changes': 'Зберегти зміни',
+  'Click the drawing, then type your note in the editor that opens.':
+    'Клацніть на кресленні, а потім введіть нотатку у вікні редактора.',
+  'Choose Edit text to change the selected note.':
+    'Натисніть «Редагувати текст», щоб змінити вибрану нотатку.',
+  'Choose Arrow, Rectangle, Ellipse or Freehand, then drag on the drawing.':
+    'Виберіть стрілку, прямокутник, еліпс або довільну лінію, а потім протягніть на кресленні.',
+  'Click the drawing to choose where your note starts.':
+    'Клацніть на кресленні, щоб вибрати початок нотатки.',
+  'Note added. Drag to move; click to edit.':
+    'Нотатку додано. Перетягніть, щоб перемістити; клацніть, щоб редагувати.',
+  'Note updated.': 'Нотатку оновлено.',
+  'This note does not fit at this position. Shorten it or reduce the text size.':
+    'Нотатка не вміщується в цьому місці. Скоротіть текст або зменште його розмір.',
+  'The drawing changed. Close this editor and select the note again.':
+    'Креслення змінилося. Закрийте редактор і знову виберіть нотатку.',
+  'Unlock the note before editing it.': 'Розблокуйте нотатку перед редагуванням.',
   'Text size (mm)': 'Розмір тексту (мм)',
   'Line width (mm)': 'Товщина лінії (мм)',
   'Apply changes': 'Застосувати зміни',
-  'Choose Text, Arrow, Rectangle, Ellipse or Freehand. Drag a graphic on the sheet; click to place text. Select an annotation to move or edit it.':
-    'Виберіть текст, стрілку, прямокутник, еліпс або довільну лінію. Для фігури перетягніть по аркушу, для тексту клацніть. Виберіть позначку, щоб перемістити або редагувати її.',
   'Annotation text cannot be empty.': 'Текст позначки не може бути порожнім.',
   text: 'текст',
   arrow: 'стрілка',
@@ -188,8 +210,10 @@ export const ukMessages: Record<string, string> = {
   'Choose a straight edge or two snap points, then click to place the dimension':
     'Виберіть пряме ребро або дві опорні точки та клацніть для розміщення розміру',
   'Alt to bypass grid': 'Alt вимикає прив’язку',
-  'Enter text in the annotation panel, then click the sheet to place it':
-    'Уведіть текст на панелі позначок та клацніть на аркуші для розміщення',
+  'Click the sheet to add text': 'Клацніть на аркуші, щоб додати текст',
+  'Click an existing text note to edit': 'Клацніть на наявній текстовій нотатці, щоб редагувати її',
+  'Click the sheet to add text · Click an existing text note to edit':
+    'Клацніть на аркуші, щоб додати текст · Клацніть на наявній текстовій нотатці, щоб редагувати її',
   'Drag on the sheet to draw': 'Перетягніть по аркушу для малювання',
   'Select an annotation to move or edit it': 'Виберіть позначку для переміщення або редагування',
   'Drawing title is shortened in the title block. Reduce its length to include the full text.':
@@ -265,17 +289,13 @@ export const ukMessages: Record<string, string> = {
   'Markup tools': 'Інструменти позначок',
   'Notes and review marks': 'Нотатки й позначки перевірки',
   'Choose a markup tool.': 'Виберіть інструмент позначок.',
-  'Enter your note and choose a color below.': 'Введіть нотатку й виберіть колір нижче.',
   'Choose a color and line width below.': 'Виберіть колір і товщину лінії нижче.',
-  'Choose Place text, then click the paper.':
-    'Натисніть «Розмістити текст», потім клацніть на аркуші.',
   'Drag on the paper to draw. Release to finish.':
     'Малюйте на аркуші, утримуючи вказівник. Відпустіть, щоб завершити.',
   'Drag on the paper from the start to the end.':
     'Протягніть на аркуші від початкової до кінцевої точки.',
   'Edit the selected mark below and choose Apply changes. Choose a tool to add another.':
     'Змініть вибрану позначку нижче й натисніть «Застосувати зміни». Щоб додати іншу, виберіть інструмент.',
-  'Place text': 'Розмістити текст',
   Lock: 'Заблокувати',
   Unlock: 'Розблокувати',
   Locked: 'Заблоковано',
@@ -299,8 +319,6 @@ export const ukMessages: Record<string, string> = {
   'Draw as many strokes as needed. Lift pen between strokes. Esc or Select finishes.':
     'Малюйте стільки штрихів, скільки потрібно. Відривайте перо між штрихами. Esc або «Вибрати» завершує малювання.',
   'Finish drawing': 'Завершити малювання',
-  'Click the sheet to place your note. Escape cancels placement.':
-    'Клацніть на аркуші, щоб розмістити нотатку. Escape скасовує розміщення.',
   'Grid spacing on paper': 'Крок сітки на папері',
   'Custom grid step': 'Власний крок сітки',
   'Custom…': 'Власний…',

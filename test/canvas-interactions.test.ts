@@ -155,7 +155,8 @@ function fixture(
     contexts: { clientX: number; clientY: number; dimensionId?: string }[] = [],
     addedAnnotations: DrawingAnnotation[] = [],
     editedAnnotations: DrawingAnnotation[] = [],
-    annotationSelections: (string | undefined)[] = [];
+    annotationSelections: (string | undefined)[] = [],
+    textRequests: { point: Point2; clientX: number; clientY: number; annotationId?: string }[] = [];
   const canvas = new DrawingCanvas({
     select: (id, additive) => selections.push({ id, additive }),
     selectMany: (ids, additive) => marquees.push({ ids, additive }),
@@ -166,6 +167,7 @@ function fixture(
     selectAnnotation: (id) => annotationSelections.push(id),
     addAnnotation: (annotation) => addedAnnotations.push(annotation),
     editAnnotation: (annotation) => editedAnnotations.push(annotation),
+    textAnnotation: (request) => textRequests.push(request),
     zoom() {},
     hint: (hint) => hints.push(hint),
     error: (error) => errors.push(error),
@@ -207,6 +209,7 @@ function fixture(
     addedAnnotations,
     editedAnnotations,
     annotationSelections,
+    textRequests,
   };
 }
 const near = (actual: number, expected: number) =>
@@ -866,7 +869,7 @@ test('stylus barrel and eraser buttons never create ink or delete existing notes
   assert.equal(host.captured.size, 0);
 });
 
-test('text placement uses the inline editor options and moving notes preserves their complete independent geometry', () => {
+test('text drags preserve stored geometry while text-tool clicks request a composer without pretyped text', () => {
   const note: DrawingAnnotation = {
     id: 'note',
     kind: 'text',
@@ -875,11 +878,8 @@ test('text placement uses the inline editor options and moving notes preserves t
     fontSize: 4,
     strokeWidth: 0.35,
   };
-  const { canvas, host, client, click, editedAnnotations, addedAnnotations } = fixture(
-    [],
-    [],
-    [note],
-  );
+  const { canvas, host, client, click, editedAnnotations, addedAnnotations, textRequests, errors } =
+    fixture([], [], [note]);
   const start = client([31, 39]),
     end = client([41, 44]);
   host.dispatch('pointerdown', { clientX: start[0], clientY: start[1] });
@@ -890,19 +890,199 @@ test('text placement uses the inline editor options and moving notes preserves t
   near(editedAnnotations[0].points[0][1], 45);
   assert.equal(editedAnnotations[0].text, 'Check fit');
   assert.deepEqual(note.points, [[30, 40]]);
-  canvas.setAnnotationOptions({
-    text: 'Assembly note\nReview before release',
-    fontSize: 3.5,
-    strokeWidth: 0.4,
-    color: '#2678d4',
-  });
+  assert.equal(textRequests.length, 0, 'Dragging existing text must not open its editor');
   canvas.setTool('text');
   canvas.setGrid({ visible: false, snap: true, spacing: 5 });
-  click(client([72.3, 83.1]));
-  assert.equal(addedAnnotations.length, 1);
-  assert.deepEqual(addedAnnotations[0].points, [[70, 85]]);
-  assert.equal(addedAnnotations[0].text, 'Assembly note\nReview before release');
-  assert.equal(addedAnnotations[0].color, '#2678d4');
+  const location = client([72.3, 83.1]);
+  click(location);
+  assert.equal(addedAnnotations.length, 0);
+  assert.equal(errors.length, 0);
+  assert.deepEqual(textRequests, [{ point: [70, 85], clientX: location[0], clientY: location[1] }]);
+});
+
+test('unlocked text taps request editing at their exact stored anchor for mouse, touch and pen', () => {
+  for (const pointerType of ['mouse', 'touch', 'pen']) {
+    const note: DrawingAnnotation = {
+      id: 'text-note',
+      kind: 'text',
+      points: [[31.2, 43.4]],
+      text: 'Review fit',
+      fontSize: 4,
+      strokeWidth: 0.35,
+      color: '#2678d4',
+    };
+    const { canvas, host, client, textRequests, editedAnnotations } = fixture([], [], [note]);
+    canvas.setGrid({ visible: false, snap: true, spacing: 5 });
+    const at = client([32, 42.5]);
+    host.dispatch('pointerdown', { pointerType, clientX: at[0], clientY: at[1] });
+    assert.equal(textRequests.length, 0, 'The composer must wait for a completed tap');
+    host.dispatch('pointerup', { pointerType, clientX: at[0], clientY: at[1] });
+    assert.deepEqual(textRequests, [
+      { point: [31.2, 43.4], clientX: at[0], clientY: at[1], annotationId: note.id },
+    ]);
+    assert.equal(editedAnnotations.length, 0);
+    assert.deepEqual(note.points, [[31.2, 43.4]]);
+    assert.equal(canvas.canPlaceAnnotation(note), true);
+    assert.equal(canvas.canPlaceAnnotation({ ...note, points: [[-1, 43.4]] }), false);
+  }
+});
+
+test('Text mode edits existing text taps and moves existing text drags without creating overlapping notes', () => {
+  const note: DrawingAnnotation = {
+    id: 'existing-text',
+    kind: 'text',
+    points: [[30, 40]],
+    text: 'Existing note',
+    fontSize: 4,
+    strokeWidth: 0.35,
+  };
+  const { canvas, host, client, click, textRequests, addedAnnotations, editedAnnotations } =
+    fixture([], [], [note]);
+  canvas.setTool('text');
+  const at = client([31, 39]);
+  click(at);
+  assert.deepEqual(textRequests, [
+    { point: [30, 40], clientX: at[0], clientY: at[1], annotationId: note.id },
+  ]);
+  assert.equal(addedAnnotations.length, 0);
+  host.dispatch('pointerdown', { clientX: at[0], clientY: at[1] });
+  host.dispatch('pointermove', { clientX: at[0] + 20, clientY: at[1] + 10 });
+  host.dispatch('pointerup', { clientX: at[0] + 20, clientY: at[1] + 10 });
+  assert.equal(textRequests.length, 1);
+  assert.equal(addedAnnotations.length, 0);
+  assert.equal(editedAnnotations.length, 1);
+  assert.equal(editedAnnotations[0].id, note.id);
+});
+
+test('Text mode respects locked text and uses graphic annotations as new-note anchors', () => {
+  const locked: DrawingAnnotation = {
+    id: 'locked-text',
+    kind: 'text',
+    points: [[30, 40]],
+    text: 'Approved note',
+    fontSize: 4,
+    strokeWidth: 0.35,
+    locked: true,
+  };
+  const lockedFixture = fixture([], [], [locked]);
+  lockedFixture.canvas.setTool('text');
+  lockedFixture.click(lockedFixture.client([31, 39]));
+  assert.equal(lockedFixture.annotationSelections.at(-1), locked.id);
+  assert.equal(lockedFixture.textRequests.length, 0);
+  for (const kind of ['arrow', 'rectangle', 'ellipse', 'freehand'] as const) {
+    const graphic: DrawingAnnotation = {
+      id: kind,
+      kind,
+      points: [
+        [30, 40],
+        [60, 70],
+      ],
+      strokeWidth: 0.35,
+      locked: true,
+    };
+    const { canvas, client, click, textRequests, annotationSelections } = fixture(
+      [],
+      [],
+      [graphic],
+    );
+    canvas.setTool('text');
+    const at = client([30, 40]);
+    click(at);
+    assert.equal(textRequests.length, 1);
+    assert.equal(textRequests[0].annotationId, undefined);
+    near(textRequests[0].point[0], 30);
+    near(textRequests[0].point[1], 40);
+    assert.equal(annotationSelections.length, 0);
+  }
+});
+
+test('text composer requests respect drag thresholds, cancellation, paper bounds and Alt grid bypass', () => {
+  const { canvas, host, client, textRequests, addedAnnotations } = fixture();
+  canvas.setTool('text');
+  canvas.setGrid({ visible: false, snap: true, spacing: 5 });
+  const at = client([72.3, 83.1]);
+  host.dispatch('pointerdown', { clientX: at[0], clientY: at[1] });
+  host.dispatch('pointermove', { clientX: at[0] + 12, clientY: at[1] + 12 });
+  host.dispatch('pointerup', { clientX: at[0] + 12, clientY: at[1] + 12 });
+  assert.equal(textRequests.length, 0);
+  host.dispatch('pointerdown', { clientX: at[0], clientY: at[1] });
+  host.dispatch('pointercancel');
+  host.dispatch('pointerup', { clientX: at[0], clientY: at[1] });
+  assert.equal(textRequests.length, 0);
+  for (const point of [
+    [-0.1, 40],
+    [430, 40],
+    [40, -1],
+    [40, 300],
+  ] as Point2[]) {
+    const outside = client(point);
+    host.dispatch('pointerdown', { clientX: outside[0], clientY: outside[1] });
+    host.dispatch('pointerup', { clientX: outside[0], clientY: outside[1] });
+  }
+  assert.equal(
+    textRequests.length,
+    0,
+    'Snapping an outside click onto the border must not place a note',
+  );
+  host.dispatch('pointerdown', { clientX: at[0], clientY: at[1], altKey: true });
+  host.dispatch('pointerup', { clientX: at[0], clientY: at[1], altKey: true });
+  assert.equal(textRequests.length, 1);
+  near(textRequests[0].point[0], 72.3);
+  near(textRequests[0].point[1], 83.1);
+  assert.equal(addedAnnotations.length, 0);
+});
+
+test('text mode preserves pinch navigation and ignores palm contact during a pen tap', () => {
+  const { canvas, host, client, textRequests } = fixture();
+  canvas.setTool('text');
+  host.dispatch('pointerdown', { pointerType: 'touch', pointerId: 10, clientX: 250, clientY: 250 });
+  host.dispatch('pointerdown', { pointerType: 'touch', pointerId: 11, clientX: 350, clientY: 250 });
+  host.dispatch('pointermove', { pointerType: 'touch', pointerId: 11, clientX: 400, clientY: 250 });
+  host.dispatch('pointerup', { pointerType: 'touch', pointerId: 11, clientX: 400, clientY: 250 });
+  host.dispatch('pointerup', { pointerType: 'touch', pointerId: 10, clientX: 250, clientY: 250 });
+  assert.equal(textRequests.length, 0);
+  assert.ok(canvas.zoom > 1);
+  const point = client([80, 90]),
+    pen = { pointerType: 'pen', pointerId: 42 };
+  host.dispatch('pointerdown', { ...pen, clientX: point[0], clientY: point[1] });
+  host.dispatch('pointerdown', { pointerType: 'touch', pointerId: 70, clientX: 300, clientY: 300 });
+  host.dispatch('pointerup', { pointerType: 'touch', pointerId: 70 });
+  assert.equal(textRequests.length, 0);
+  host.dispatch('pointerup', { ...pen, clientX: point[0], clientY: point[1] });
+  assert.equal(textRequests.length, 1);
+  near(textRequests[0].point[0], 80);
+  near(textRequests[0].point[1], 90);
+});
+
+test('locked notes and read-only drawing surfaces never request the text composer', () => {
+  const locked: DrawingAnnotation = {
+    id: 'locked-text',
+    kind: 'text',
+    points: [[30, 40]],
+    text: 'Approved',
+    fontSize: 4,
+    strokeWidth: 0.35,
+    locked: true,
+  };
+  const { canvas, host, client, click, textRequests, annotationSelections } = fixture(
+    [],
+    [],
+    [locked],
+  );
+  const at = client([31, 39]);
+  click(at);
+  assert.equal(annotationSelections.at(-1), locked.id);
+  assert.equal(textRequests.length, 0);
+  canvas.setReadOnly(true);
+  click(at);
+  canvas.setTool('text');
+  click(client([70, 80]));
+  assert.equal(textRequests.length, 0);
+  canvas.setReadOnly(false);
+  canvas.setTool('text');
+  host.dispatch('pointerdown', { clientX: at[0], clientY: at[1], button: 1 });
+  host.dispatch('pointerup', { clientX: at[0], clientY: at[1], button: 1 });
+  assert.equal(textRequests.length, 0);
 });
 
 test('annotation dragging rebases its pointer snapshot after selection changes the floating-control viewport', () => {

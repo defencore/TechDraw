@@ -78,9 +78,16 @@ interface CanvasCallbacks {
   selectAnnotation(id?: string): void;
   addAnnotation(annotation: DrawingAnnotation): void;
   editAnnotation(annotation: DrawingAnnotation): void;
+  textAnnotation(request: TextAnnotationRequest): void;
   zoom(value: number): void;
   hint(message: string): void;
   error(message: string): void;
+}
+export interface TextAnnotationRequest {
+  point: Point2;
+  clientX: number;
+  clientY: number;
+  annotationId?: string;
 }
 interface PointerGesture {
   pointerId: number;
@@ -94,6 +101,7 @@ interface PointerGesture {
   previews?: Dimension[];
   viewport?: ViewportState;
   click?: boolean;
+  textRequest?: boolean;
   marquee?: { endSheet: Point2; endClient: Point2; additive: boolean };
   annotation?: DrawingAnnotation;
   annotationPreview?: DrawingAnnotation;
@@ -476,10 +484,13 @@ export class DrawingCanvas {
     const svg = this.element?.querySelector<SVGSVGElement>('#paper-host > svg');
     return svg ? pickDimension(svg, [event.clientX, event.clientY]) : undefined;
   }
-  private annotationAt(event: { clientX: number; clientY: number }): DrawingAnnotation | undefined {
+  private annotationAt(
+    event: { clientX: number; clientY: number },
+    kind?: DrawingAnnotation['kind'],
+  ): DrawingAnnotation | undefined {
     if (!this.document || !this.metrics) return;
     const id = pickAnnotation(
-      this.document.annotations ?? [],
+      (this.document.annotations ?? []).filter((annotation) => !kind || annotation.kind === kind),
       this.sheetPoint(event),
       getViewportTransform(this.viewport, this.metrics).scale,
     );
@@ -542,8 +553,11 @@ export class DrawingCanvas {
       }
     }
     const annotation =
-      !this.readOnly && this.tool === 'select' && !this.space && event.button === 0
-        ? this.annotationAt(event)
+      !this.readOnly &&
+      (this.tool === 'select' || this.tool === 'text') &&
+      !this.space &&
+      event.button === 0
+        ? this.annotationAt(event, this.tool === 'text' ? 'text' : undefined)
         : undefined;
     const id =
       !this.readOnly && !annotation && this.tool === 'select' && !this.space && event.button === 0
@@ -571,7 +585,7 @@ export class DrawingCanvas {
       (this.tool === 'select' && !dimension && !annotation);
     const box = this.tool === 'box-select' && !pan;
     let created: DrawingAnnotation | undefined;
-    if (!pan && isAnnotationTool(this.tool)) {
+    if (!pan && isAnnotationTool(this.tool) && this.tool !== 'text') {
       try {
         created = createAnnotation(
           this.tool,
@@ -622,7 +636,9 @@ export class DrawingCanvas {
               }
             : pan
               ? { viewport: structuredClone(this.viewport) }
-              : { click: true }),
+              : this.tool === 'text'
+                ? { textRequest: true }
+                : { click: true }),
     };
     this.element.setPointerCapture(event.pointerId);
     event.preventDefault();
@@ -740,7 +756,22 @@ export class DrawingCanvas {
       this.element.releasePointerCapture(event.pointerId);
     this.element?.classList.remove('panning', 'dimension-dragging');
     this.marqueeFeedback();
-    if (gesture.annotation && this.document) {
+    if (gesture.textRequest) {
+      if (
+        !gesture.moved &&
+        !this.readOnly &&
+        this.tool === 'text' &&
+        event.button === 0 &&
+        this.sheet
+      ) {
+        const raw = this.sheetPoint(event),
+          point = this.annotationPoint(event);
+        const inside = (p: Point2) =>
+          p[0] >= 0 && p[1] >= 0 && p[0] <= this.sheet!.width && p[1] <= this.sheet!.height;
+        if (inside(raw) && inside(point))
+          this.callbacks.textAnnotation({ point, clientX: event.clientX, clientY: event.clientY });
+      }
+    } else if (gesture.annotation && this.document) {
       if (
         gesture.annotation.locked ||
         this.document.annotations?.some((item) => item.id === gesture.annotation!.id && item.locked)
@@ -750,14 +781,24 @@ export class DrawingCanvas {
       }
       if (gesture.moved) this.previewAnnotation(gesture, event);
       const next = gesture.annotationPreview ?? gesture.annotation;
-      if (
-        (!gesture.creatingAnnotation && !gesture.moved) ||
-        (gesture.creatingAnnotation && next.kind !== 'text' && !gesture.moved)
-      ) {
+      if (!gesture.moved) {
         this.restoreGesture(gesture);
+        if (
+          !gesture.creatingAnnotation &&
+          !this.readOnly &&
+          (this.tool === 'select' || this.tool === 'text') &&
+          next.kind === 'text' &&
+          event.button === 0
+        )
+          this.callbacks.textAnnotation({
+            point: [...next.points[0]],
+            clientX: event.clientX,
+            clientY: event.clientY,
+            annotationId: next.id,
+          });
         return;
       }
-      if (this.annotationFits(next) && this.annotationVisible(next)) {
+      if (this.canPlaceAnnotation(next) && this.annotationVisible(next)) {
         if (gesture.creatingAnnotation) this.callbacks.addAnnotation(next);
         else this.callbacks.editAnnotation(next);
       } else {
@@ -1057,10 +1098,7 @@ export class DrawingCanvas {
         gesture.annotationPreview = preview;
       } else {
         const point = this.annotationPoint(event);
-        gesture.annotationPreview =
-          original.kind === 'text'
-            ? { ...original, points: [point] }
-            : extendAnnotation(gesture.annotationPreview ?? original, point);
+        gesture.annotationPreview = extendAnnotation(gesture.annotationPreview ?? original, point);
       }
     } else {
       const point = this.sheetPoint(event);
@@ -1076,7 +1114,8 @@ export class DrawingCanvas {
     }
     this.patchAnnotation(gesture.annotationPreview, true);
   }
-  private annotationFits(annotation: DrawingAnnotation): boolean {
+  /** Validate composer/drag bounds against the current physical sheet without editing it. */
+  canPlaceAnnotation(annotation: DrawingAnnotation): boolean {
     if (!this.sheet) return false;
     const b = annotationBounds(annotation);
     return b.minX >= 0 && b.minY >= 0 && b.maxX <= this.sheet.width && b.maxY <= this.sheet.height;
@@ -1275,7 +1314,7 @@ export class DrawingCanvas {
       ? 'Drag to pan · Pinch or wheel to zoom · Fit to show the sheet'
       : isAnnotationTool(this.tool)
         ? this.tool === 'text'
-          ? 'Enter text in the annotation panel, then click the sheet to place it'
+          ? 'Click the sheet to add text · Click an existing text note to edit'
           : 'Drag on the sheet to draw · Select an annotation to move or edit it · Esc to cancel'
         : this.draft
           ? 'Click to place the dimension · Esc to cancel · Wheel to zoom'

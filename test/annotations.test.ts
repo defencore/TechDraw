@@ -159,7 +159,16 @@ test('annotation color controls use strict hex values and preserve selected chan
       RangeError,
     );
   }
-  const selected = { ...note, color: '#2678d4' };
+  const selected: DrawingAnnotation = {
+    id: 'arrow',
+    kind: 'arrow',
+    points: [
+      [10, 20],
+      [30, 40],
+    ],
+    strokeWidth: 0.35,
+    color: '#2678d4',
+  };
   const root = {
     querySelector(selector: string) {
       return selector === '[data-annotation-setting="color"]' ? { value: '#8B5BD6' } : undefined;
@@ -173,10 +182,8 @@ test('annotation color controls use strict hex values and preserve selected chan
   assert.equal((form.match(/data-annotation-color=/g) ?? []).length, 6);
   assert.match(form, /data-annotation-action="apply"/);
   assert.doesNotMatch(form, /data-annotation-action="place"/);
-  assert.match(
-    renderAnnotationEditor(undefined, defaultAnnotationOptions, 'text'),
-    /data-annotation-action="place"/,
-  );
+  const textCue = renderAnnotationEditor(undefined, defaultAnnotationOptions, 'text');
+  assert.equal(textCue, '');
   assert.doesNotMatch(
     renderAnnotationEditor(undefined, defaultAnnotationOptions, 'arrow'),
     /annotation-text|data-annotation-action="place"/,
@@ -222,7 +229,7 @@ test('annotation picking is stable in screen pixels and transparent shapes do no
 test('freehand drawing is bounded and smooth while blank text cannot become an accidental note', () => {
   assert.throws(
     () => createAnnotation('text', [20, 30], defaultAnnotationOptions),
-    /Enter the annotation text/,
+    /Annotation text cannot be empty/,
   );
   assert.throws(
     () =>
@@ -277,8 +284,11 @@ test('inline graphic editing changes paper position and size while preserving re
   values.width = '-1';
   assert.throws(() => readAnnotationEdit(root, rectangle), /positive graphic size/);
   const html = renderAnnotationEditor(note);
-  assert.match(html, /data-annotation-action="apply"/);
-  assert.match(html, /data-annotation-coordinate="x"/);
+  assert.match(html, /data-annotation-action="edit-text"/);
+  assert.doesNotMatch(html, /<textarea|data-annotation-coordinate=|data-annotation-setting=/);
   assert.match(html, /Check &lt;&amp;&gt;/);
   assert.doesNotMatch(html, /window\.prompt|onclick=/);
+  const graphic = renderAnnotationEditor(rectangle);
+  assert.match(graphic, /data-annotation-action="apply"/);
+  assert.match(graphic, /data-annotation-coordinate="x"/);
 });
