@@ -10,9 +10,10 @@ export function renderDimensionEditor(
   selection = { count: 1, lockedCount: dimension.locked ? 1 : 0 },
 ): string {
   const symbol = dimension.kind === 'diameter' ? 'Ø' : dimension.kind === 'radius' ? 'R' : '';
+  const displayPrecision = Math.max(precision, dimension.minimumPrecision ?? 0);
   const allLocked = selection.count > 0 && selection.lockedCount === selection.count;
   return `<section class="dimension-editor" aria-label="Selected dimension">
-    <div class="dimension-editor-header"><div><span class="section-label">SELECTED DIMENSION</span><div class="dimension-value">${symbol}${dimension.value.toFixed(precision)}<span>${dimension.kind === 'angle' ? '°' : 'mm'}</span></div></div><div class="dimension-editor-actions">${button('toggle-selection-lock', allLocked ? 'Unlock' : 'Lock', allLocked ? 'unlock' : 'lock', 'item-lock-button', `aria-label="${allLocked ? 'Unlock selection' : 'Lock selection'}" aria-pressed="${allLocked}"`)}${button('delete-dimension', 'Delete', 'trash', 'text-button dimension-delete', `aria-label="Delete selected dimension"${selection.lockedCount ? ' disabled' : ''}`)}</div></div>
+    <div class="dimension-editor-header"><div><span class="section-label">SELECTED DIMENSION</span><div class="dimension-value">${symbol}${dimension.value.toFixed(displayPrecision)}<span>${dimension.kind === 'angle' ? '°' : 'mm'}</span></div></div><div class="dimension-editor-actions">${button('toggle-selection-lock', allLocked ? 'Unlock' : 'Lock', allLocked ? 'unlock' : 'lock', 'item-lock-button', `aria-label="${allLocked ? 'Unlock selection' : 'Lock selection'}" aria-pressed="${allLocked}"`)}${button('delete-dimension', 'Delete', 'trash', 'text-button dimension-delete', `aria-label="Delete selected dimension"${selection.lockedCount ? ' disabled' : ''}`)}</div></div>
     <p class="field-help">${t(dimension.viewId[0].toUpperCase() + dimension.viewId.slice(1))} · ${t(dimension.kind)} · ${t(dimension.automatic ? 'Automatic' : 'Manual')}.${selection.lockedCount ? '' : ` ${t('Drag its label or line to move it.')}`}</p>
     ${dimension.locked ? '<p class="locked-item-notice" role="status">Locked. Unlock to move, edit or delete this dimension.</p>' : ''}
     <fieldset class="dimension-edit-fields"${dimension.locked ? ' disabled' : ''}>

@@ -1033,7 +1033,10 @@
   gap: 6px;
 }
 .dimension-editor-actions {
+  flex: 0 0 auto;
   flex-wrap: wrap;
+  max-width: 100%;
+  margin-left: auto;
   justify-content: flex-end;
 }
 .annotation-editor-header .section-label {

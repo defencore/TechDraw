@@ -1324,6 +1324,7 @@ h1 {
   letter-spacing: -1px;
 }
 .dimension-value span {
+  display: inline-block;
   font-size: 11px;
   margin-left: 5px;
   color: var(--muted);
@@ -1345,7 +1346,8 @@ h1 {
 }
 .dimension-editor-header {
   display: flex;
-  align-items: center;
+  flex-wrap: wrap;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 8px;
   margin-bottom: 8px;
@@ -1353,11 +1355,15 @@ h1 {
 .dimension-editor-header > div {
   min-width: 0;
 }
+.dimension-editor-header > div:first-child {
+  flex: 1 0 auto;
+}
 .dimension-editor-header .dimension-value {
   font-size: 24px;
   line-height: 1.15;
   letter-spacing: -0.6px;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
+  overflow-wrap: normal;
 }
 .dimension-editor-header .section-label {
   display: block;
@@ -1419,7 +1425,7 @@ h1 {
 }
 .tolerance-modes {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 3px;
   padding: 3px;
   margin-bottom: 10px;
@@ -1437,6 +1443,7 @@ h1 {
   font-weight: 550;
   line-height: 1.2;
   white-space: normal;
+  overflow-wrap: anywhere;
   color: var(--muted);
 }
 .tolerance-mode.active,
